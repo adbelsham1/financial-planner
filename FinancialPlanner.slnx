@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FinancialPlanner.Api/FinancialPlanner.Api.csproj" />
+    <Project Path="src/FinancialPlanner.Infrastructure/FinancialPlanner.Infrastructure.csproj" />
+    <Project Path="src/FinancialPlanner.Worker/FinancialPlanner.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FinancialPlanner.Api.Tests/FinancialPlanner.Api.Tests.csproj" />
+    <Project Path="tests/FinancialPlanner.Worker.Tests/FinancialPlanner.Worker.Tests.csproj" />
+  </Folder>
+</Solution>

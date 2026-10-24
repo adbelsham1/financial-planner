@@ -1,0 +1,42 @@
+name: financial-planner-production
+region: syd
+services:
+  - name: api
+    dockerfile_path: src/FinancialPlanner.Api/Dockerfile
+    github:
+      branch: main
+      deploy_on_push: false
+      repo: adbelsham1/financial-planner
+    health_check:
+      http_path: /api/health/live
+      initial_delay_seconds: 15
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 3
+      success_threshold: 1
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    routes:
+      - path: /api
+workers:
+  - name: worker
+    dockerfile_path: src/FinancialPlanner.Worker/Dockerfile
+    github:
+      branch: main
+      deploy_on_push: false
+      repo: adbelsham1/financial-planner
+    instance_count: 1
+    instance_size_slug: basic-xxs
+static_sites:
+  - name: web
+    build_command: cd financial-planner-web && npm ci && npm run build
+    environment_slug: node-js
+    github:
+      branch: main
+      deploy_on_push: false
+      repo: adbelsham1/financial-planner
+    output_dir: financial-planner-web/dist
+    source_dir: /
+    routes:
+      - path: /

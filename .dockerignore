@@ -1,0 +1,7 @@
+.git
+.github
+.do
+**/bin
+**/obj
+financial-planner-web
+node_modules
