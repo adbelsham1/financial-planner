@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore FinancialPlanner.slnx
+      - run: dotnet format FinancialPlanner.slnx --verify-no-changes --no-restore
+      - run: dotnet build FinancialPlanner.slnx --no-restore
+      - run: dotnet test FinancialPlanner.slnx --no-build
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: financial-planner-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: financial-planner-web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+        env:
+          PUBLIC_API_BASE_URL: /api
+
+  deploy:
+    name: Deploy
+    needs: [backend, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: financial-planner-production
+      cancel-in-progress: false
+    steps:
+      - name: Verify the checked commit is still main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: test "$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - run: doctl apps create-deployment "${{ secrets.DIGITALOCEAN_APP_ID }}" --wait
