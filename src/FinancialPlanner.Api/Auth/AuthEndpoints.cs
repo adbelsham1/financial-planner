@@ -137,6 +137,7 @@ public static class AuthEndpoints
         SignInManager<AppUser> signInManager,
         PlannerDbContext database,
         IAuthenticationEmailSender emailSender,
+        HttpContext context,
         CancellationToken cancellationToken)
     {
         var user = await users.FindByEmailAsync(request.Email.Trim());
@@ -164,7 +165,8 @@ public static class AuthEndpoints
             ActorId = user.Id,
             Action = "authentication.password-verified",
             Outcome = "success",
-            CorrelationId = Guid.NewGuid().ToString("N")
+            CorrelationId = context.TraceIdentifier,
+            HashedIpAddress = HashIpAddress(context)
         });
         await database.SaveChangesAsync(cancellationToken);
         await emailSender.SendOtpAsync(user.Email!, code, cancellationToken);
@@ -220,6 +222,7 @@ public static class AuthEndpoints
         UserManager<AppUser> users,
         PlannerDbContext database,
         IAuthenticationEmailSender emailSender,
+        HttpContext context,
         CancellationToken cancellationToken)
     {
         var normalizedEmail = request.Email.Trim().ToUpperInvariant();
@@ -278,7 +281,8 @@ public static class AuthEndpoints
             ActorId = user.Id,
             Action = "owner.registration.requested",
             Outcome = "success",
-            CorrelationId = Guid.NewGuid().ToString("N")
+            CorrelationId = context.TraceIdentifier,
+            HashedIpAddress = HashIpAddress(context)
         });
         await database.SaveChangesAsync(cancellationToken);
         await emailSender.SendOtpAsync(user.Email, code, cancellationToken);
@@ -290,6 +294,7 @@ public static class AuthEndpoints
         VerifyOtpRequest request,
         UserManager<AppUser> users,
         PlannerDbContext database,
+        HttpContext context,
         CancellationToken cancellationToken)
     {
         var user = await users.FindByEmailAsync(request.Email.Trim());
@@ -319,10 +324,19 @@ public static class AuthEndpoints
             ActorId = user.Id,
             Action = "owner.email-confirmed",
             Outcome = "success",
-            CorrelationId = Guid.NewGuid().ToString("N")
+            CorrelationId = context.TraceIdentifier,
+            HashedIpAddress = HashIpAddress(context)
         });
         await database.SaveChangesAsync(cancellationToken);
         await users.UpdateAsync(user);
         return Results.NoContent();
+    }
+
+    private static string? HashIpAddress(HttpContext context)
+    {
+        var address = context.Connection.RemoteIpAddress?.ToString();
+        return string.IsNullOrWhiteSpace(address)
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(address)));
     }
 }
