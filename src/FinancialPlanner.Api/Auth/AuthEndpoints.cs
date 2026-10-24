@@ -21,6 +21,7 @@ public static class AuthEndpoints
         group.MapPost("/sign-in", BeginSignInAsync);
         group.MapPost("/sign-in/verify", CompleteSignInAsync);
         group.MapPost("/refresh", RefreshAsync);
+        group.MapPost("/sign-out", SignOutAsync);
         group.MapPost("/password-reset", RequestPasswordResetAsync);
         group.MapPost("/password-reset/verify", CompletePasswordResetAsync);
         group.MapGet("/me", GetCurrentUserAsync).RequireAuthorization();
@@ -98,6 +99,25 @@ public static class AuthEndpoints
         HttpContext context,
         CancellationToken cancellationToken) =>
         await sessions.RefreshAsync(context, cancellationToken) ? Results.NoContent() : Results.Unauthorized();
+
+    private static async Task<IResult> SignOutAsync(
+        PlannerDbContext database,
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.Request.Cookies.TryGetValue("fp_refresh", out var refreshToken))
+        {
+            var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken)));
+            await database.RefreshTokens
+                .Where(token => token.TokenHash == tokenHash && token.RevokedAt == null)
+                .ExecuteUpdateAsync(updates => updates.SetProperty(token => token.RevokedAt, DateTimeOffset.UtcNow),
+                    cancellationToken);
+        }
+
+        context.Response.Cookies.Delete("fp_access");
+        context.Response.Cookies.Delete("fp_refresh");
+        return Results.NoContent();
+    }
 
     [Authorize]
     private static async Task<IResult> GetCurrentUserAsync(
