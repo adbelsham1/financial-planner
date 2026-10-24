@@ -21,7 +21,9 @@ runtime secrets to both the API and Worker components:
 
 The API and Worker must be attached to the database private network. The
 Spaces bucket must remain private; application code will use short-lived
-signed URLs when document intake is implemented.
+signed URLs when document intake is implemented. The Web component builds with
+`PUBLIC_API_BASE_URL=/api`, so it calls the API through the App Platform ingress
+instead of depending on a generated application domain.
 
 Set `DIGITALOCEAN_ACCESS_TOKEN` and `DIGITALOCEAN_APP_ID` as GitHub Actions
 secrets. The deployment workflow then triggers `doctl apps create-deployment`

@@ -19,6 +19,7 @@ services:
     instance_size_slug: basic-xxs
     routes:
       - path: /api
+        preserve_path_prefix: true
 workers:
   - name: worker
     dockerfile_path: src/FinancialPlanner.Worker/Dockerfile
@@ -38,5 +39,9 @@ static_sites:
       repo: adbelsham1/financial-planner
     output_dir: financial-planner-web/dist
     source_dir: /
+    envs:
+      - key: PUBLIC_API_BASE_URL
+        scope: BUILD_TIME
+        value: /api
     routes:
       - path: /

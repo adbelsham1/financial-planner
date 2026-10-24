@@ -21,7 +21,7 @@ cd financial-planner-web
 npm ci
 npm run lint
 npm run test
-VITE_API_BASE_URL=http://localhost:5050/api npm run dev
+PUBLIC_API_BASE_URL=http://localhost:5050/api npm run dev
 ```
 
 Run the API in a second terminal:
