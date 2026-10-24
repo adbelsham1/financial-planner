@@ -67,6 +67,7 @@ builder.Services
     .AddSignInManager();
 builder.Services.AddScoped<IAuthenticationEmailSender, DevelopmentAuthenticationEmailSender>();
 builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddScoped<SessionService>();
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>

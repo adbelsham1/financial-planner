@@ -20,9 +20,84 @@ public static class AuthEndpoints
         group.MapPost("/verify-email", VerifyEmailAsync);
         group.MapPost("/sign-in", BeginSignInAsync);
         group.MapPost("/sign-in/verify", CompleteSignInAsync);
+        group.MapPost("/refresh", RefreshAsync);
+        group.MapPost("/password-reset", RequestPasswordResetAsync);
+        group.MapPost("/password-reset/verify", CompletePasswordResetAsync);
         group.MapGet("/me", GetCurrentUserAsync).RequireAuthorization();
         return group;
     }
+
+    private static async Task<IResult> RequestPasswordResetAsync(
+        ResetPasswordRequest request,
+        UserManager<AppUser> users,
+        PlannerDbContext database,
+        IAuthenticationEmailSender emailSender,
+        CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !user.EmailConfirmed)
+        {
+            return Results.Accepted();
+        }
+
+        var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+        database.EmailOtps.Add(new EmailOtp
+        {
+            UserId = user.Id,
+            Purpose = "password-reset",
+            CodeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))),
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
+        });
+        await database.SaveChangesAsync(cancellationToken);
+        await emailSender.SendOtpAsync(user.Email!, code, cancellationToken);
+        return Results.Accepted();
+    }
+
+    private static async Task<IResult> CompletePasswordResetAsync(
+        CompletePasswordResetRequest request,
+        UserManager<AppUser> users,
+        PlannerDbContext database,
+        CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var codeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Code)));
+        var otp = await database.EmailOtps.OrderByDescending(item => item.ExpiresAt)
+            .FirstOrDefaultAsync(item => item.UserId == user.Id
+                && item.Purpose == "password-reset"
+                && item.ConsumedAt == null
+                && item.ExpiresAt > DateTimeOffset.UtcNow, cancellationToken);
+        if (otp is null || !CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(otp.CodeHash), Convert.FromHexString(codeHash)))
+        {
+            return Results.BadRequest();
+        }
+
+        var resetToken = await users.GeneratePasswordResetTokenAsync(user);
+        var result = await users.ResetPasswordAsync(user, resetToken, request.NewPassword);
+        if (!result.Succeeded)
+        {
+            return Results.ValidationProblem(result.Errors
+                .GroupBy(error => error.Code)
+                .ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray()));
+        }
+
+        otp.ConsumedAt = DateTimeOffset.UtcNow;
+        await database.RefreshTokens.Where(token => token.UserId == user.Id && token.RevokedAt == null)
+            .ExecuteUpdateAsync(updates => updates.SetProperty(token => token.RevokedAt, DateTimeOffset.UtcNow), cancellationToken);
+        await database.SaveChangesAsync(cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> RefreshAsync(
+        SessionService sessions,
+        HttpContext context,
+        CancellationToken cancellationToken) =>
+        await sessions.RefreshAsync(context, cancellationToken) ? Results.NoContent() : Results.Unauthorized();
 
     [Authorize]
     private static async Task<IResult> GetCurrentUserAsync(
@@ -80,7 +155,7 @@ public static class AuthEndpoints
         VerifyOtpRequest request,
         UserManager<AppUser> users,
         PlannerDbContext database,
-        JwtTokenService tokenService,
+        SessionService sessions,
         HttpContext context,
         CancellationToken cancellationToken)
     {
@@ -116,14 +191,7 @@ public static class AuthEndpoints
             CorrelationId = context.TraceIdentifier
         });
         await database.SaveChangesAsync(cancellationToken);
-        context.Response.Cookies.Append("fp_access", tokenService.CreateAccessToken(user, membership.TenantId), new CookieOptions
-        {
-            HttpOnly = true,
-            IsEssential = true,
-            SameSite = SameSiteMode.Strict,
-            Secure = context.Request.IsHttps,
-            MaxAge = TimeSpan.FromMinutes(15)
-        });
+        await sessions.IssueAsync(user, membership.TenantId, context, cancellationToken);
         return Results.NoContent();
     }
 
