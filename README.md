@@ -41,3 +41,10 @@ Production is DigitalOcean App Platform in SYD1. The API, Worker, and Web
 components are defined in `.do/app.yaml`; DigitalOcean setup and required
 runtime secrets are documented in `.do/README.md`. GitHub Actions deploys
 `main` with `doctl` only after all CI checks pass.
+# Financial Planner
+
+## Authentication end-to-end tests
+
+Start the real PostgreSQL test database with `docker compose -f docker-compose.e2e.yml up -d`, then start the API with
+`ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://127.0.0.1:5050 ConnectionStrings__Postgres='Host=127.0.0.1;Database=financial_planner_e2e;Username=postgres;Password=postgres' Infrastructure__WebOrigin=http://127.0.0.1:3000 dotnet run --project src/FinancialPlanner.Api`.
+Run `npm run test:e2e` in `financial-planner-web`. Development-only email capture supplies test OTPs; production uses Gmail SMTP settings exclusively from runtime secrets.
