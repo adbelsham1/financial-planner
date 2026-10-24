@@ -1,12 +1,10 @@
-using System.Security.Cryptography;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
 using FinancialPlanner.Api.Email;
 using FinancialPlanner.Infrastructure;
 using FinancialPlanner.Infrastructure.Identity;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 namespace FinancialPlanner.Api.Auth;
@@ -18,233 +16,46 @@ public static class AuthEndpoints
         var group = endpoints.MapGroup("/api/auth");
         group.MapPost("/register", RegisterAsync);
         group.MapPost("/verify-email", VerifyEmailAsync);
+        group.MapPost("/verify-email/resend", ResendEmailVerificationAsync);
         group.MapPost("/sign-in", BeginSignInAsync);
+        group.MapPost("/sign-in/resend", ResendSignInAsync);
         group.MapPost("/sign-in/verify", CompleteSignInAsync);
         group.MapPost("/refresh", RefreshAsync);
         group.MapPost("/sign-out", SignOutAsync);
         group.MapPost("/password-reset", RequestPasswordResetAsync);
+        group.MapPost("/password-reset/resend", RequestPasswordResetAsync);
         group.MapPost("/password-reset/verify", CompletePasswordResetAsync);
-        group.MapGet("/me", GetCurrentUserAsync).RequireAuthorization();
+        group.MapGet("/me", GetCurrentUserAsync).RequireAuthorization("TenantRead");
         return group;
     }
 
-    private static async Task<IResult> RequestPasswordResetAsync(
-        ResetPasswordRequest request,
-        UserManager<AppUser> users,
-        PlannerDbContext database,
-        IAuthenticationEmailSender emailSender,
-        CancellationToken cancellationToken)
+    private static async Task<IResult> RegisterAsync(RegisterOwnerRequest request, UserManager<AppUser> users,
+        PlannerDbContext database, OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit,
+        HttpContext context, CancellationToken cancellationToken)
     {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null || !user.EmailConfirmed)
+        if (!IsRegistrationValid(request))
         {
-            return Results.Accepted();
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["registration"] = ["All fields are required."] });
         }
 
-        var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
-        database.EmailOtps.Add(new EmailOtp
-        {
-            UserId = user.Id,
-            Purpose = "password-reset",
-            CodeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))),
-            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
-        });
-        await database.SaveChangesAsync(cancellationToken);
-        await emailSender.SendOtpAsync(user.Email!, code, cancellationToken);
-        return Results.Accepted();
-    }
-
-    private static async Task<IResult> CompletePasswordResetAsync(
-        CompletePasswordResetRequest request,
-        UserManager<AppUser> users,
-        PlannerDbContext database,
-        CancellationToken cancellationToken)
-    {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
-        {
-            return Results.BadRequest();
-        }
-
-        var codeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Code)));
-        var otp = await database.EmailOtps.OrderByDescending(item => item.ExpiresAt)
-            .FirstOrDefaultAsync(item => item.UserId == user.Id
-                && item.Purpose == "password-reset"
-                && item.ConsumedAt == null
-                && item.ExpiresAt > DateTimeOffset.UtcNow, cancellationToken);
-        if (otp is null || !CryptographicOperations.FixedTimeEquals(
-                Convert.FromHexString(otp.CodeHash), Convert.FromHexString(codeHash)))
-        {
-            return Results.BadRequest();
-        }
-
-        var resetToken = await users.GeneratePasswordResetTokenAsync(user);
-        var result = await users.ResetPasswordAsync(user, resetToken, request.NewPassword);
-        if (!result.Succeeded)
-        {
-            return Results.ValidationProblem(result.Errors
-                .GroupBy(error => error.Code)
-                .ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray()));
-        }
-
-        otp.ConsumedAt = DateTimeOffset.UtcNow;
-        await database.RefreshTokens.Where(token => token.UserId == user.Id && token.RevokedAt == null)
-            .ExecuteUpdateAsync(updates => updates.SetProperty(token => token.RevokedAt, DateTimeOffset.UtcNow), cancellationToken);
-        await database.SaveChangesAsync(cancellationToken);
-        return Results.NoContent();
-    }
-
-    private static async Task<IResult> RefreshAsync(
-        SessionService sessions,
-        HttpContext context,
-        CancellationToken cancellationToken) =>
-        await sessions.RefreshAsync(context, cancellationToken) ? Results.NoContent() : Results.Unauthorized();
-
-    private static async Task<IResult> SignOutAsync(
-        PlannerDbContext database,
-        HttpContext context,
-        CancellationToken cancellationToken)
-    {
-        if (context.Request.Cookies.TryGetValue("fp_refresh", out var refreshToken))
-        {
-            var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken)));
-            await database.RefreshTokens
-                .Where(token => token.TokenHash == tokenHash && token.RevokedAt == null)
-                .ExecuteUpdateAsync(updates => updates.SetProperty(token => token.RevokedAt, DateTimeOffset.UtcNow),
-                    cancellationToken);
-        }
-
-        context.Response.Cookies.Delete("fp_access");
-        context.Response.Cookies.Delete("fp_refresh");
-        return Results.NoContent();
-    }
-
-    [Authorize]
-    private static async Task<IResult> GetCurrentUserAsync(
-        ClaimsPrincipal principal,
-        PlannerDbContext database,
-        CancellationToken cancellationToken)
-    {
-        var userId = Guid.Parse(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
-        var membership = await database.TenantMemberships
-            .SingleAsync(item => item.UserId == userId, cancellationToken);
-        return Results.Ok(new { membership.TenantId, UserId = userId });
-    }
-
-    private static async Task<IResult> BeginSignInAsync(
-        SignInRequest request,
-        UserManager<AppUser> users,
-        SignInManager<AppUser> signInManager,
-        PlannerDbContext database,
-        IAuthenticationEmailSender emailSender,
-        HttpContext context,
-        CancellationToken cancellationToken)
-    {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null || !user.EmailConfirmed)
-        {
-            return Results.Unauthorized();
-        }
-
-        var passwordResult = await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
-        if (!passwordResult.Succeeded)
-        {
-            return Results.Unauthorized();
-        }
-
-        var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
-        database.EmailOtps.Add(new EmailOtp
-        {
-            UserId = user.Id,
-            Purpose = "sign-in",
-            CodeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))),
-            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
-        });
-        database.AuditEvents.Add(new AuditEvent
-        {
-            ActorId = user.Id,
-            Action = "authentication.password-verified",
-            Outcome = "success",
-            CorrelationId = context.TraceIdentifier,
-            HashedIpAddress = HashIpAddress(context)
-        });
-        await database.SaveChangesAsync(cancellationToken);
-        await emailSender.SendOtpAsync(user.Email!, code, cancellationToken);
-        return Results.Accepted();
-    }
-
-    private static async Task<IResult> CompleteSignInAsync(
-        VerifyOtpRequest request,
-        UserManager<AppUser> users,
-        PlannerDbContext database,
-        SessionService sessions,
-        HttpContext context,
-        CancellationToken cancellationToken)
-    {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
-        {
-            return Results.BadRequest();
-        }
-
-        var codeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Code)));
-        var otp = await database.EmailOtps
-            .OrderByDescending(item => item.ExpiresAt)
-            .FirstOrDefaultAsync(item => item.UserId == user.Id
-                && item.Purpose == "sign-in"
-                && item.ConsumedAt == null
-                && item.ExpiresAt > DateTimeOffset.UtcNow, cancellationToken);
-        if (otp is null || !CryptographicOperations.FixedTimeEquals(
-                Convert.FromHexString(otp.CodeHash),
-                Convert.FromHexString(codeHash)))
-        {
-            return Results.BadRequest();
-        }
-
-        var membership = await database.TenantMemberships
-            .SingleAsync(item => item.UserId == user.Id, cancellationToken);
-        otp.ConsumedAt = DateTimeOffset.UtcNow;
-        database.AuditEvents.Add(new AuditEvent
-        {
-            TenantId = membership.TenantId,
-            ActorId = user.Id,
-            Action = "authentication.sign-in",
-            Outcome = "success",
-            CorrelationId = context.TraceIdentifier
-        });
-        await database.SaveChangesAsync(cancellationToken);
-        await sessions.IssueAsync(user, membership.TenantId, context, cancellationToken);
-        return Results.NoContent();
-    }
-
-    private static async Task<IResult> RegisterAsync(
-        RegisterOwnerRequest request,
-        UserManager<AppUser> users,
-        PlannerDbContext database,
-        IAuthenticationEmailSender emailSender,
-        HttpContext context,
-        CancellationToken cancellationToken)
-    {
-        var normalizedEmail = request.Email.Trim().ToUpperInvariant();
-        if (await users.Users.AnyAsync(user => user.NormalizedEmail == normalizedEmail, cancellationToken))
+        if (await users.FindByEmailAsync(request.Email.Trim()) is not null)
         {
             return Results.Conflict();
         }
 
+        await using var transaction = database.Database.IsRelational()
+            ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
         var user = new AppUser
         {
             Id = Guid.NewGuid(),
             UserName = request.Email.Trim(),
             Email = request.Email.Trim(),
-            DisplayName = request.DisplayName.Trim(),
-            EmailConfirmed = false
+            DisplayName = request.DisplayName.Trim()
         };
-        var identityResult = await users.CreateAsync(user, request.Password);
-        if (!identityResult.Succeeded)
+        var result = await users.CreateAsync(user, request.Password);
+        if (!result.Succeeded)
         {
-            return Results.ValidationProblem(identityResult.Errors
-                .GroupBy(error => error.Code)
-                .ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray()));
+            return IdentityValidation(result);
         }
 
         var tenant = new Tenant { Name = request.WorkspaceName.Trim() };
@@ -254,89 +65,146 @@ public static class AuthEndpoints
             Name = $"{user.DisplayName} Personal",
             Kind = LegalEntityKind.Personal
         };
-        var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
-        database.Tenants.Add(tenant);
-        database.LegalEntities.Add(legalEntity);
-        database.TenantMemberships.Add(new TenantMembership
-        {
-            TenantId = tenant.Id,
-            UserId = user.Id,
-            Role = TenantRole.Owner
-        });
-        database.LegalEntityGrants.Add(new LegalEntityGrant
-        {
-            LegalEntityId = legalEntity.Id,
-            UserId = user.Id
-        });
-        database.EmailOtps.Add(new EmailOtp
-        {
-            UserId = user.Id,
-            Purpose = "email-confirmation",
-            CodeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))),
-            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
-        });
-        database.AuditEvents.Add(new AuditEvent
-        {
-            TenantId = tenant.Id,
-            ActorId = user.Id,
-            Action = "owner.registration.requested",
-            Outcome = "success",
-            CorrelationId = context.TraceIdentifier,
-            HashedIpAddress = HashIpAddress(context)
-        });
+        database.AddRange(tenant, legalEntity,
+            new TenantMembership { TenantId = tenant.Id, UserId = user.Id, Role = TenantRole.Owner },
+            new LegalEntityGrant { LegalEntityId = legalEntity.Id, UserId = user.Id, Role = TenantRole.Owner });
+        var code = await otps.IssueAsync(user.Id, "email-confirmation", cancellationToken);
+        audit.Add(context, "owner.registration.requested", $"tenant:{tenant.Id}", "success", tenant.Id, user.Id);
         await database.SaveChangesAsync(cancellationToken);
-        await emailSender.SendOtpAsync(user.Email, code, cancellationToken);
-
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+        await emailSender.SendOtpAsync(user.Email, code!, "email-confirmation", cancellationToken);
         return Results.Accepted();
     }
 
-    private static async Task<IResult> VerifyEmailAsync(
-        VerifyOtpRequest request,
-        UserManager<AppUser> users,
-        PlannerDbContext database,
-        HttpContext context,
-        CancellationToken cancellationToken)
+    private static async Task<IResult> ResendEmailVerificationAsync(ResetPasswordRequest request,
+        UserManager<AppUser> users, OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit,
+        HttpContext context, CancellationToken cancellationToken)
     {
         var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
+        if (user is null || user.EmailConfirmed)
+        {
+            return Results.Accepted();
+        }
+        return await IssueOtpAsync(user, "email-confirmation", users, otps, emailSender, audit, context, cancellationToken);
+    }
+
+    private static async Task<IResult> VerifyEmailAsync(VerifyOtpRequest request, UserManager<AppUser> users,
+        OtpService otps, PlannerDbContext database, AuditService audit, HttpContext context, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !await otps.ConsumeAsync(user.Id, "email-confirmation", request.Code, cancellationToken))
         {
             return Results.BadRequest();
         }
-
-        var codeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Code)));
-        var otp = await database.EmailOtps
-            .OrderByDescending(item => item.ExpiresAt)
-            .FirstOrDefaultAsync(item => item.UserId == user.Id
-                && item.Purpose == "email-confirmation"
-                && item.ConsumedAt == null
-                && item.ExpiresAt > DateTimeOffset.UtcNow, cancellationToken);
-        if (otp is null || !CryptographicOperations.FixedTimeEquals(
-                Convert.FromHexString(otp.CodeHash),
-                Convert.FromHexString(codeHash)))
-        {
-            return Results.BadRequest();
-        }
-
-        otp.ConsumedAt = DateTimeOffset.UtcNow;
         user.EmailConfirmed = true;
-        database.AuditEvents.Add(new AuditEvent
-        {
-            ActorId = user.Id,
-            Action = "owner.email-confirmed",
-            Outcome = "success",
-            CorrelationId = context.TraceIdentifier,
-            HashedIpAddress = HashIpAddress(context)
-        });
-        await database.SaveChangesAsync(cancellationToken);
         await users.UpdateAsync(user);
+        var tenantId = await database.TenantMemberships.Where(x => x.UserId == user.Id).Select(x => (Guid?)x.TenantId)
+            .SingleOrDefaultAsync(cancellationToken);
+        audit.Add(context, "owner.email-confirmed", $"user:{user.Id}", "success", tenantId, user.Id);
+        await database.SaveChangesAsync(cancellationToken);
         return Results.NoContent();
     }
 
-    private static string? HashIpAddress(HttpContext context)
+    private static async Task<IResult> BeginSignInAsync(SignInRequest request, UserManager<AppUser> users,
+        SignInManager<AppUser> signIn, OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit,
+        PlannerDbContext database, HttpContext context, CancellationToken cancellationToken)
     {
-        var address = context.Connection.RemoteIpAddress?.ToString();
-        return string.IsNullOrWhiteSpace(address)
-            ? null
-            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(address)));
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !user.EmailConfirmed ||
+            !(await signIn.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true)).Succeeded)
+        {
+            audit.Add(context, "authentication.password", "email", "failure");
+            await database.SaveChangesAsync(cancellationToken);
+            return Results.Unauthorized();
+        }
+        return await IssueOtpAsync(user, "sign-in", users, otps, emailSender, audit, context, cancellationToken);
     }
+
+    private static async Task<IResult> ResendSignInAsync(ResetPasswordRequest request, UserManager<AppUser> users,
+        OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit, HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !user.EmailConfirmed) return Results.Accepted();
+        return await IssueOtpAsync(user, "sign-in", users, otps, emailSender, audit, context, cancellationToken);
+    }
+
+    private static async Task<IResult> CompleteSignInAsync(VerifyOtpRequest request, UserManager<AppUser> users,
+        OtpService otps, PlannerDbContext database, SessionService sessions, AuditService audit, HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !await otps.ConsumeAsync(user.Id, "sign-in", request.Code, cancellationToken)) return Results.BadRequest();
+        var membership = await database.TenantMemberships.SingleAsync(x => x.UserId == user.Id, cancellationToken);
+        audit.Add(context, "authentication.sign-in", $"user:{user.Id}", "success", membership.TenantId, user.Id);
+        await database.SaveChangesAsync(cancellationToken);
+        await sessions.IssueAsync(user, membership, context, cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> RequestPasswordResetAsync(ResetPasswordRequest request, UserManager<AppUser> users,
+        OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit, HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !user.EmailConfirmed) return Results.Accepted();
+        return await IssueOtpAsync(user, "password-reset", users, otps, emailSender, audit, context, cancellationToken);
+    }
+
+    private static async Task<IResult> CompletePasswordResetAsync(CompletePasswordResetRequest request, UserManager<AppUser> users,
+        OtpService otps, PlannerDbContext database, AuditService audit, HttpContext context, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null || !await otps.ConsumeAsync(user.Id, "password-reset", request.Code, cancellationToken)) return Results.BadRequest();
+        var reset = await users.ResetPasswordAsync(user, await users.GeneratePasswordResetTokenAsync(user), request.NewPassword);
+        if (!reset.Succeeded) return IdentityValidation(reset);
+        var activeSessions = await database.RefreshTokens.Where(x => x.UserId == user.Id && x.RevokedAt == null)
+            .ToListAsync(cancellationToken);
+        foreach (var session in activeSessions) session.RevokedAt = DateTimeOffset.UtcNow;
+        var tenantId = await database.TenantMemberships.Where(x => x.UserId == user.Id).Select(x => (Guid?)x.TenantId)
+            .SingleOrDefaultAsync(cancellationToken);
+        audit.Add(context, "authentication.password-reset", $"user:{user.Id}", "success", tenantId, user.Id);
+        await database.SaveChangesAsync(cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> RefreshAsync(SessionService sessions, HttpContext context, CancellationToken cancellationToken) =>
+        await sessions.RefreshAsync(context, cancellationToken) ? Results.NoContent() : Results.Unauthorized();
+
+    private static async Task<IResult> SignOutAsync(SessionService sessions, HttpContext context, CancellationToken cancellationToken)
+    {
+        await sessions.RevokeAsync(context, cancellationToken);
+        return Results.NoContent();
+    }
+
+    [Authorize(Policy = "TenantRead")]
+    private static async Task<IResult> GetCurrentUserAsync(ClaimsPrincipal principal, PlannerDbContext database,
+        CancellationToken cancellationToken)
+    {
+        var userId = Guid.Parse(principal.FindFirstValue(JwtRegisteredClaimNames.Sub) ??
+            principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var membership = await database.TenantMemberships.SingleAsync(x => x.UserId == userId, cancellationToken);
+        return Results.Ok(new { membership.TenantId, UserId = userId, Role = membership.Role.ToString() });
+    }
+
+    private static async Task<IResult> IssueOtpAsync(AppUser user, string purpose, UserManager<AppUser> users,
+        OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit, HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var code = await otps.IssueAsync(user.Id, purpose, cancellationToken);
+        if (code is null) return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+        audit.Add(context, $"authentication.{purpose}.issued", $"user:{user.Id}", "success");
+        await audit.SaveChangesAsync(cancellationToken);
+        await emailSender.SendOtpAsync(user.Email!, code, purpose, cancellationToken);
+        return Results.Accepted();
+    }
+
+    private static IResult IdentityValidation(IdentityResult result) => Results.ValidationProblem(result.Errors
+        .GroupBy(error => error.Code).ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray()));
+    private static bool IsRegistrationValid(RegisterOwnerRequest request) =>
+        !string.IsNullOrWhiteSpace(request.DisplayName) && !string.IsNullOrWhiteSpace(request.Email) &&
+        !string.IsNullOrWhiteSpace(request.Password) && !string.IsNullOrWhiteSpace(request.WorkspaceName);
 }

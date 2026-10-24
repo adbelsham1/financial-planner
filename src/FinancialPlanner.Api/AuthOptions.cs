@@ -9,4 +9,8 @@ public sealed class AuthOptions
     [Required]
     [MinLength(32)]
     public required string JwtSigningKey { get; init; }
+
+    [Required]
+    [MinLength(32)]
+    public required string AuditIpHashKey { get; init; }
 }

@@ -45,3 +45,26 @@ export const completeSignIn = async (email: string, code: string) => {
     throw new Error('The verification code is invalid or expired.');
   }
 };
+
+const post = async (path: string, payload: object) => {
+  const response = await fetch(`${apiBaseUrl}/auth/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    credentials: 'include',
+  });
+  if (!response.ok) throw new Error(`Authentication request failed: ${response.status}`);
+};
+
+export const verifyEmail = (email: string, code: string) => post('verify-email', { email, code });
+export const requestPasswordReset = (email: string) => post('password-reset', { email });
+export const resendEmailVerification = (email: string) => post('verify-email/resend', { email });
+export const resendSignInCode = (email: string) => post('sign-in/resend', { email });
+export const completePasswordReset = (email: string, code: string, newPassword: string) =>
+  post('password-reset/verify', { email, code, newPassword });
+export const signOut = () => post('sign-out', {});
+export const currentUser = async (): Promise<{ tenantId: string; userId: string; role: string }> => {
+  const response = await fetch(`${apiBaseUrl}/auth/me`, { credentials: 'include' });
+  if (!response.ok) throw new Error('Not authenticated.');
+  return response.json() as Promise<{ tenantId: string; userId: string; role: string }>;
+};

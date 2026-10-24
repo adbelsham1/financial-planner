@@ -23,7 +23,32 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         builder.Entity<TenantMembership>().HasKey(item => new { item.TenantId, item.UserId });
         builder.Entity<LegalEntityGrant>().HasKey(item => new { item.LegalEntityId, item.UserId });
         builder.Entity<EmailOtp>().HasIndex(item => new { item.UserId, item.Purpose, item.ExpiresAt });
+        builder.Entity<EmailOtp>().Property(item => item.CodeHash).HasMaxLength(64);
         builder.Entity<RefreshToken>().HasIndex(item => item.TokenHash).IsUnique();
+        builder.Entity<RefreshToken>().HasIndex(item => new { item.UserId, item.SessionId });
         builder.Entity<AuditEvent>().HasIndex(item => new { item.TenantId, item.OccurredAt });
+        builder.Entity<AuditEvent>().Property(item => item.Action).HasMaxLength(128);
+        builder.Entity<AuditEvent>().Property(item => item.Target).HasMaxLength(256);
+        builder.Entity<AuditEvent>().Property(item => item.CorrelationId).HasMaxLength(128);
+    }
+
+    public override int SaveChanges()
+    {
+        EnsureAuditEventsAreAppendOnly();
+        return base.SaveChanges();
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureAuditEventsAreAppendOnly();
+        return base.SaveChangesAsync(cancellationToken);
+    }
+
+    private void EnsureAuditEventsAreAppendOnly()
+    {
+        if (ChangeTracker.Entries<AuditEvent>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted))
+        {
+            throw new InvalidOperationException("Audit events are append-only.");
+        }
     }
 }

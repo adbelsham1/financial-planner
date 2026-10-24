@@ -11,6 +11,7 @@ public sealed class LegalEntityGrant
 {
     public Guid LegalEntityId { get; init; }
     public Guid UserId { get; init; }
+    public required TenantRole Role { get; set; }
 }
 
 public enum TenantRole

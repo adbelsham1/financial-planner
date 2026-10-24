@@ -40,6 +40,51 @@ jobs:
         env:
           PUBLIC_API_BASE_URL: /api
 
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: financial_planner_e2e
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d financial_planner_e2e"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: financial-planner-web/package-lock.json
+      - run: dotnet restore FinancialPlanner.slnx
+      - run: dotnet build FinancialPlanner.slnx --no-restore
+      - run: npm ci
+        working-directory: financial-planner-web
+      - run: npx playwright install --with-deps chromium
+        working-directory: financial-planner-web
+      - name: Start API against PostgreSQL
+        run: >-
+          ASPNETCORE_ENVIRONMENT=Development
+          ASPNETCORE_URLS=http://127.0.0.1:5050
+          ConnectionStrings__Postgres='Host=127.0.0.1;Database=financial_planner_e2e;Username=postgres;Password=postgres'
+          Infrastructure__WebOrigin=http://127.0.0.1:3000
+          dotnet run --no-build --project src/FinancialPlanner.Api/FinancialPlanner.Api.csproj &
+      - name: Run browser authentication workflow
+        run: |
+          for attempt in {1..30}; do curl --fail --silent http://127.0.0.1:5050/api/health/ready && break; sleep 1; done
+          curl --fail --silent http://127.0.0.1:5050/api/health/ready
+          npm run test:e2e
+        working-directory: financial-planner-web
+
   deploy:
     name: Deploy
     needs: [backend, frontend]
