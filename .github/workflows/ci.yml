@@ -78,7 +78,7 @@ jobs:
           ASPNETCORE_URLS=http://127.0.0.1:5050
           ConnectionStrings__Postgres='Host=127.0.0.1;Database=financial_planner_e2e;Username=postgres'
           Infrastructure__WebOrigin=http://127.0.0.1:3000
-          dotnet run --no-build --project src/FinancialPlanner.Api/FinancialPlanner.Api.csproj > api-e2e.log 2>&1 &
+          dotnet run --no-build --no-launch-profile --project src/FinancialPlanner.Api/FinancialPlanner.Api.csproj > api-e2e.log 2>&1 &
       - name: Run browser authentication workflow
         run: |
           for attempt in {1..30}; do curl --fail --silent http://127.0.0.1:5050/api/health/ready && break; sleep 1; done
