@@ -23,6 +23,7 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         builder.Entity<TenantMembership>().HasKey(item => new { item.TenantId, item.UserId });
         builder.Entity<LegalEntityGrant>().HasKey(item => new { item.LegalEntityId, item.UserId });
         builder.Entity<EmailOtp>().HasIndex(item => new { item.UserId, item.Purpose, item.ExpiresAt });
+        builder.Entity<EmailOtp>().HasIndex(item => new { item.SourceHash, item.Purpose, item.ExpiresAt });
         builder.Entity<EmailOtp>().Property(item => item.CodeHash).HasMaxLength(64);
         builder.Entity<RefreshToken>().HasIndex(item => item.TokenHash).IsUnique();
         builder.Entity<RefreshToken>().HasIndex(item => new { item.UserId, item.SessionId });

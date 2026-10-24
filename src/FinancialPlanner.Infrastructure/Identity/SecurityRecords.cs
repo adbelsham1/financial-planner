@@ -6,6 +6,7 @@ public sealed class EmailOtp
     public required Guid UserId { get; init; }
     public required string Purpose { get; init; }
     public required string CodeHash { get; init; }
+    public required string SourceHash { get; init; }
     public DateTimeOffset ExpiresAt { get; init; }
     public int FailedAttempts { get; set; }
     public DateTimeOffset? LastAttemptAt { get; set; }

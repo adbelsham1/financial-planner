@@ -3,6 +3,7 @@ using System.Text;
 using FinancialPlanner.Infrastructure;
 using FinancialPlanner.Infrastructure.Identity;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace FinancialPlanner.Api.Auth;
 
@@ -52,6 +53,8 @@ public sealed class SessionService(JwtTokenService tokens, PlannerDbContext data
             return false;
         }
 
+        await using var transaction = database.Database.IsRelational()
+            ? await database.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken) : null;
         var record = await database.RefreshTokens.SingleOrDefaultAsync(token => token.TokenHash == Hash(refreshToken), cancellationToken);
         if (record is null)
         {
@@ -81,10 +84,10 @@ public sealed class SessionService(JwtTokenService tokens, PlannerDbContext data
         // IssueAsync owns cookie creation and persistence; retaining a rotation family makes replay revocable.
         database.RefreshTokens.Add(next);
         record.ReplacedById = next.Id;
-        await database.SaveChangesAsync(cancellationToken);
-        WriteCookies(user, membership, nextRawToken, context);
         audit.Add(context, "authentication.refresh", $"session:{record.SessionId}", "success", membership.TenantId, user.Id);
         await database.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        WriteCookies(user, membership, nextRawToken, context);
         return true;
     }
 
@@ -105,7 +108,7 @@ public sealed class SessionService(JwtTokenService tokens, PlannerDbContext data
 
     private void WriteCookies(AppUser user, TenantMembership membership, string refreshToken, HttpContext context)
     {
-        var secure = context.Request.IsHttps || !context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment();
+        var secure = !context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment() || context.Request.IsHttps;
         context.Response.Cookies.Append("fp_access", tokens.CreateAccessToken(user, membership.TenantId, membership.Role),
             new CookieOptions { HttpOnly = true, IsEssential = true, SameSite = SameSiteMode.Strict, Secure = secure, MaxAge = TimeSpan.FromMinutes(15) });
         context.Response.Cookies.Append("fp_refresh", refreshToken,

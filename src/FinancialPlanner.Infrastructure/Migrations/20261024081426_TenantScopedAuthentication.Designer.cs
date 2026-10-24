@@ -165,12 +165,17 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("SourceHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
 
                     b.HasIndex("UserId", "Purpose", "ExpiresAt");
+                    b.HasIndex("SourceHash", "Purpose", "ExpiresAt");
 
                     b.ToTable("EmailOtps");
                 });

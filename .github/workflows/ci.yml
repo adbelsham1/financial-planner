@@ -50,6 +50,7 @@ jobs:
           POSTGRES_DB: financial_planner_e2e
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -75,7 +76,7 @@ jobs:
         run: >-
           ASPNETCORE_ENVIRONMENT=Development
           ASPNETCORE_URLS=http://127.0.0.1:5050
-          ConnectionStrings__Postgres='Host=127.0.0.1;Database=financial_planner_e2e;Username=postgres;Password=postgres'
+          ConnectionStrings__Postgres='Host=127.0.0.1;Database=financial_planner_e2e;Username=postgres'
           Infrastructure__WebOrigin=http://127.0.0.1:3000
           dotnet run --no-build --project src/FinancialPlanner.Api/FinancialPlanner.Api.csproj &
       - name: Run browser authentication workflow

@@ -33,9 +33,9 @@ public static class AuthEndpoints
         PlannerDbContext database, OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit,
         HttpContext context, CancellationToken cancellationToken)
     {
-        if (!IsRegistrationValid(request))
+        if (!TryValidate(request, out var validation))
         {
-            return Results.ValidationProblem(new Dictionary<string, string[]> { ["registration"] = ["All fields are required."] });
+            return Results.ValidationProblem(validation);
         }
 
         if (await users.FindByEmailAsync(request.Email.Trim()) is not null)
@@ -68,7 +68,7 @@ public static class AuthEndpoints
         database.AddRange(tenant, legalEntity,
             new TenantMembership { TenantId = tenant.Id, UserId = user.Id, Role = TenantRole.Owner },
             new LegalEntityGrant { LegalEntityId = legalEntity.Id, UserId = user.Id, Role = TenantRole.Owner });
-        var code = await otps.IssueAsync(user.Id, "email-confirmation", cancellationToken);
+        var code = await otps.IssueAsync(user.Id, "email-confirmation", context, cancellationToken);
         audit.Add(context, "owner.registration.requested", $"tenant:{tenant.Id}", "success", tenant.Id, user.Id);
         await database.SaveChangesAsync(cancellationToken);
         if (transaction is not null)
@@ -83,6 +83,7 @@ public static class AuthEndpoints
         UserManager<AppUser> users, OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit,
         HttpContext context, CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
         if (user is null || user.EmailConfirmed)
         {
@@ -94,17 +95,21 @@ public static class AuthEndpoints
     private static async Task<IResult> VerifyEmailAsync(VerifyOtpRequest request, UserManager<AppUser> users,
         OtpService otps, PlannerDbContext database, AuditService audit, HttpContext context, CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null || !await otps.ConsumeAsync(user.Id, "email-confirmation", request.Code, cancellationToken))
+        if (user is null)
         {
             return Results.BadRequest();
         }
+        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
+        if (!await otps.ConsumeAsync(user.Id, "email-confirmation", request.Code, context, cancellationToken)) return Results.BadRequest();
         user.EmailConfirmed = true;
         await users.UpdateAsync(user);
         var tenantId = await database.TenantMemberships.Where(x => x.UserId == user.Id).Select(x => (Guid?)x.TenantId)
             .SingleOrDefaultAsync(cancellationToken);
         audit.Add(context, "owner.email-confirmed", $"user:{user.Id}", "success", tenantId, user.Id);
         await database.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return Results.NoContent();
     }
 
@@ -112,6 +117,7 @@ public static class AuthEndpoints
         SignInManager<AppUser> signIn, OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit,
         PlannerDbContext database, HttpContext context, CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
         if (user is null || !user.EmailConfirmed ||
             !(await signIn.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true)).Succeeded)
@@ -127,6 +133,7 @@ public static class AuthEndpoints
         OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit, HttpContext context,
         CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
         if (user is null || !user.EmailConfirmed) return Results.Accepted();
         return await IssueOtpAsync(user, "sign-in", users, otps, emailSender, audit, context, cancellationToken);
@@ -136,12 +143,16 @@ public static class AuthEndpoints
         OtpService otps, PlannerDbContext database, SessionService sessions, AuditService audit, HttpContext context,
         CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null || !await otps.ConsumeAsync(user.Id, "sign-in", request.Code, cancellationToken)) return Results.BadRequest();
+        if (user is null) return Results.BadRequest();
+        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
+        if (!await otps.ConsumeAsync(user.Id, "sign-in", request.Code, context, cancellationToken)) return Results.BadRequest();
         var membership = await database.TenantMemberships.SingleAsync(x => x.UserId == user.Id, cancellationToken);
         audit.Add(context, "authentication.sign-in", $"user:{user.Id}", "success", membership.TenantId, user.Id);
         await database.SaveChangesAsync(cancellationToken);
         await sessions.IssueAsync(user, membership, context, cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return Results.NoContent();
     }
 
@@ -149,6 +160,7 @@ public static class AuthEndpoints
         OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit, HttpContext context,
         CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
         if (user is null || !user.EmailConfirmed) return Results.Accepted();
         return await IssueOtpAsync(user, "password-reset", users, otps, emailSender, audit, context, cancellationToken);
@@ -157,8 +169,11 @@ public static class AuthEndpoints
     private static async Task<IResult> CompletePasswordResetAsync(CompletePasswordResetRequest request, UserManager<AppUser> users,
         OtpService otps, PlannerDbContext database, AuditService audit, HttpContext context, CancellationToken cancellationToken)
     {
+        if (!TryValidate(request, out var validation)) return Results.ValidationProblem(validation);
         var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null || !await otps.ConsumeAsync(user.Id, "password-reset", request.Code, cancellationToken)) return Results.BadRequest();
+        if (user is null) return Results.BadRequest();
+        await using var transaction = database.Database.IsRelational() ? await database.Database.BeginTransactionAsync(cancellationToken) : null;
+        if (!await otps.ConsumeAsync(user.Id, "password-reset", request.Code, context, cancellationToken)) return Results.BadRequest();
         var reset = await users.ResetPasswordAsync(user, await users.GeneratePasswordResetTokenAsync(user), request.NewPassword);
         if (!reset.Succeeded) return IdentityValidation(reset);
         var activeSessions = await database.RefreshTokens.Where(x => x.UserId == user.Id && x.RevokedAt == null)
@@ -168,6 +183,7 @@ public static class AuthEndpoints
             .SingleOrDefaultAsync(cancellationToken);
         audit.Add(context, "authentication.password-reset", $"user:{user.Id}", "success", tenantId, user.Id);
         await database.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return Results.NoContent();
     }
 
@@ -194,7 +210,7 @@ public static class AuthEndpoints
         OtpService otps, IAuthenticationEmailSender emailSender, AuditService audit, HttpContext context,
         CancellationToken cancellationToken)
     {
-        var code = await otps.IssueAsync(user.Id, purpose, cancellationToken);
+        var code = await otps.IssueAsync(user.Id, purpose, context, cancellationToken);
         if (code is null) return Results.StatusCode(StatusCodes.Status429TooManyRequests);
         audit.Add(context, $"authentication.{purpose}.issued", $"user:{user.Id}", "success");
         await audit.SaveChangesAsync(cancellationToken);
@@ -204,7 +220,38 @@ public static class AuthEndpoints
 
     private static IResult IdentityValidation(IdentityResult result) => Results.ValidationProblem(result.Errors
         .GroupBy(error => error.Code).ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray()));
-    private static bool IsRegistrationValid(RegisterOwnerRequest request) =>
-        !string.IsNullOrWhiteSpace(request.DisplayName) && !string.IsNullOrWhiteSpace(request.Email) &&
-        !string.IsNullOrWhiteSpace(request.Password) && !string.IsNullOrWhiteSpace(request.WorkspaceName);
+    private static bool TryValidate(RegisterOwnerRequest request, out Dictionary<string, string[]> errors)
+    {
+        errors = [];
+        AddIfInvalid(errors, "displayName", request.DisplayName, 128);
+        AddIfInvalid(errors, "workspaceName", request.WorkspaceName, 128);
+        AddIfInvalid(errors, "email", request.Email, 256, email: true);
+        AddIfInvalid(errors, "password", request.Password, 1024);
+        return errors.Count == 0;
+    }
+    private static bool TryValidate(VerifyOtpRequest request, out Dictionary<string, string[]> errors)
+    {
+        errors = []; AddIfInvalid(errors, "email", request.Email, 256, email: true);
+        if (string.IsNullOrWhiteSpace(request.Code) || !System.Text.RegularExpressions.Regex.IsMatch(request.Code, "^\\d{6}$")) errors["code"] = ["A six digit code is required."];
+        return errors.Count == 0;
+    }
+    private static bool TryValidate(SignInRequest request, out Dictionary<string, string[]> errors)
+    {
+        errors = []; AddIfInvalid(errors, "email", request.Email, 256, email: true); AddIfInvalid(errors, "password", request.Password, 1024); return errors.Count == 0;
+    }
+    private static bool TryValidate(ResetPasswordRequest request, out Dictionary<string, string[]> errors)
+    {
+        errors = []; AddIfInvalid(errors, "email", request.Email, 256, email: true); return errors.Count == 0;
+    }
+    private static bool TryValidate(CompletePasswordResetRequest request, out Dictionary<string, string[]> errors)
+    {
+        errors = []; AddIfInvalid(errors, "email", request.Email, 256, email: true);
+        if (string.IsNullOrWhiteSpace(request.Code) || !System.Text.RegularExpressions.Regex.IsMatch(request.Code, "^\\d{6}$")) errors["code"] = ["A six digit code is required."];
+        AddIfInvalid(errors, "newPassword", request.NewPassword, 1024); return errors.Count == 0;
+    }
+    private static void AddIfInvalid(Dictionary<string, string[]> errors, string name, string? value, int maxLength, bool email = false)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > maxLength || (email && !System.Net.Mail.MailAddress.TryCreate(value.Trim(), out _)))
+            errors[name] = [$"{name} is required and must be valid."];
+    }
 }

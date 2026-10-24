@@ -79,6 +79,7 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     UserId = table.Column<Guid>(type: "uuid", nullable: false),
                     Purpose = table.Column<string>(type: "text", nullable: false),
                     CodeHash = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                    SourceHash = table.Column<string>(type: "text", nullable: false),
                     ExpiresAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     FailedAttempts = table.Column<int>(type: "integer", nullable: false),
                     LastAttemptAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
@@ -311,6 +312,11 @@ namespace FinancialPlanner.Infrastructure.Migrations
                 name: "IX_EmailOtps_UserId_Purpose_ExpiresAt",
                 table: "EmailOtps",
                 columns: new[] { "UserId", "Purpose", "ExpiresAt" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_EmailOtps_SourceHash_Purpose_ExpiresAt",
+                table: "EmailOtps",
+                columns: new[] { "SourceHash", "Purpose", "ExpiresAt" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_RefreshTokens_TokenHash",
