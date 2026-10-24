@@ -9,12 +9,14 @@ import {
   Typography,
 } from '@mui/material';
 import React, { FormEvent, useState } from 'react';
-import { registerOwner } from './api';
+import { beginSignIn, completeSignIn, registerOwner } from './api';
 import './App.css';
 
 const App = () => {
   const [error, setError] = useState<string>();
   const [submitted, setSubmitted] = useState(false);
+  const [signInEmail, setSignInEmail] = useState('');
+  const [signInPending, setSignInPending] = useState(false);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -31,6 +33,26 @@ const App = () => {
       setSubmitted(true);
     } catch {
       setError('We could not create your workspace. Please try again.');
+    }
+  };
+
+  const handleSignIn = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(undefined);
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get('email'));
+
+    try {
+      if (signInPending) {
+        await completeSignIn(email, String(form.get('code')));
+        setSubmitted(true);
+      } else {
+        await beginSignIn(email, String(form.get('password')));
+        setSignInEmail(email);
+        setSignInPending(true);
+      }
+    } catch {
+      setError('We could not sign you in. Please check your details and try again.');
     }
   };
 
@@ -62,6 +84,33 @@ const App = () => {
             <Button size="large" type="submit" variant="contained">
               Create workspace
             </Button>
+            <Stack component="form" spacing={2} onSubmit={handleSignIn}>
+              <Typography component="h2" variant="h5">
+                Sign in
+              </Typography>
+              <TextField
+                required
+                defaultValue={signInEmail}
+                label="Email"
+                name="email"
+                type="email"
+                autoComplete="email"
+              />
+              {signInPending ? (
+                <TextField required label="Verification code" name="code" inputMode="numeric" />
+              ) : (
+                <TextField
+                  required
+                  label="Password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                />
+              )}
+              <Button type="submit" variant="outlined">
+                {signInPending ? 'Verify and sign in' : 'Sign in'}
+              </Button>
+            </Stack>
           </Stack>
         </Box>
       </Container>
