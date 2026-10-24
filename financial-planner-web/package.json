@@ -8,7 +8,7 @@
     "dev": "rsbuild",
     "lint": "eslint .",
     "preview": "rsbuild preview",
-    "test": "vitest run"
+    "test": "rstest"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -21,7 +21,7 @@
     "@eslint/js": "^10.0.1",
     "@rsbuild/core": "^2.2.14",
     "@rsbuild/plugin-react": "^2.1.1",
-    "@testing-library/jest-dom": "^7.0.1",
+    "@rstest/core": "^0.12.4",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.8",
     "@types/react": "^19.3.0",
@@ -33,7 +33,6 @@
     "globals": "^17.13.0",
     "jsdom": "^30.1.3",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.72.0",
-    "vitest": "^5.0.5"
+    "typescript-eslint": "^8.72.0"
   }
 }

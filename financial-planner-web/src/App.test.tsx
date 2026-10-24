@@ -1,10 +1,10 @@
 import { render, screen } from '@testing-library/react';
+import { expect, test } from '@rstest/core';
+import React from 'react';
 import App from './App';
 
-describe('App', () => {
-  it('renders the application baseline', () => {
-    render(<App />);
+test('renders the application baseline', () => {
+  render(<App />);
 
-    expect(screen.getByRole('heading', { name: 'Financial Planner' })).toBeInTheDocument();
-  });
+  expect(screen.getByRole('heading', { name: 'Financial Planner' })).toBeDefined();
 });
