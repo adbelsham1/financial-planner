@@ -84,6 +84,111 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
             new { email, code })).StatusCode);
     }
 
+    [Fact]
+    public async Task Owner_can_manage_joint_entity_ownership_and_contributions()
+    {
+        using var client = factory.CreateClient();
+        await RegisterAndSignInAsync(client);
+
+        var create = await client.PostAsJsonAsync("/api/legal-entities/", new
+        {
+            name = "Beach House",
+            kind = "Joint",
+            effectiveFrom = "2026-01-01",
+            ownershipParties = new[]
+            {
+                new { name = "Taylor Owner", percentage = 60m, isWorkspaceOwner = true },
+                new { name = "Jordan Co-owner", percentage = 40m, isWorkspaceOwner = false }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        using var created = JsonDocument.Parse(await create.Content.ReadAsStringAsync());
+        var entityId = created.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal(100m, created.RootElement.GetProperty("legalOwnershipPercentage").GetDecimal());
+        Assert.Equal(60m, created.RootElement.GetProperty("ownerAttributablePercentage").GetDecimal());
+
+        var contribution = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/contributions", new
+        {
+            partyName = "Jordan Co-owner",
+            effectiveOn = "2026-02-01",
+            amount = 12500m
+        });
+        Assert.Equal(HttpStatusCode.Created, contribution.StatusCode);
+
+        var detail = await client.GetAsync($"/api/legal-entities/{entityId}");
+        detail.EnsureSuccessStatusCode();
+        using var entity = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        Assert.Equal(2, entity.RootElement.GetProperty("ownershipHistory")[0].GetProperty("parties").GetArrayLength());
+        Assert.Equal(12500m, entity.RootElement.GetProperty("contributions")[0].GetProperty("amount").GetDecimal());
+        Assert.Equal("AUD", entity.RootElement.GetProperty("contributions")[0].GetProperty("currency").GetString());
+
+        var replacement = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ownership-snapshots", new
+        {
+            effectiveFrom = "2026-01-01",
+            parties = new[]
+            {
+                new { name = "Taylor Owner", percentage = 50m, isWorkspaceOwner = true },
+                new { name = "Jordan Co-owner", percentage = 50m, isWorkspaceOwner = false }
+            }
+        });
+        Assert.Equal(HttpStatusCode.Conflict, replacement.StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"/api/legal-entities/{entityId}/archive", null)).StatusCode);
+        Assert.True((await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}"))
+            .GetProperty("archivedAt").ValueKind != JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Joint_ownership_requires_a_complete_allocation_and_is_tenant_scoped()
+    {
+        using var owner = factory.CreateClient();
+        await RegisterAndSignInAsync(owner);
+        var invalid = await owner.PostAsJsonAsync("/api/legal-entities/", new
+        {
+            name = "Invalid joint entity",
+            kind = "Joint",
+            effectiveFrom = "2026-01-01",
+            ownershipParties = new[]
+            {
+                new { name = "Taylor Owner", percentage = 60m, isWorkspaceOwner = true },
+                new { name = "Jordan Co-owner", percentage = 30m, isWorkspaceOwner = false }
+            }
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var create = await owner.PostAsJsonAsync("/api/legal-entities/", new
+        {
+            name = "Private entity",
+            kind = "Personal",
+            effectiveFrom = (string?)null,
+            ownershipParties = (object?)null
+        });
+        using var created = JsonDocument.Parse(await create.Content.ReadAsStringAsync());
+        var entityId = created.RootElement.GetProperty("id").GetGuid();
+
+        using var anotherOwner = factory.CreateClient();
+        await RegisterAndSignInAsync(anotherOwner);
+        Assert.Equal(HttpStatusCode.NotFound, (await anotherOwner.GetAsync($"/api/legal-entities/{entityId}")).StatusCode);
+    }
+
+    private static async Task RegisterAndSignInAsync(HttpClient client)
+    {
+        var email = $"owner-{Guid.NewGuid():N}@example.com";
+        const string password = "A-long-enough-password1!";
+        var registration = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            displayName = "Taylor Owner",
+            email,
+            password,
+            workspaceName = "Taylor Financial Planner"
+        });
+        Assert.Equal(HttpStatusCode.Accepted, registration.StatusCode);
+        await VerifyOtpAsync(client, "/api/auth/verify-email", email);
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync("/api/auth/sign-in", new { email, password })).StatusCode);
+        await VerifyOtpAsync(client, "/api/auth/sign-in/verify", email);
+    }
+
     private static async Task VerifyOtpAsync(HttpClient client, string path, string email)
     {
         var code = await LatestCodeAsync(client, email);

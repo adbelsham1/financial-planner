@@ -171,8 +171,9 @@ namespace FinancialPlanner.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId", "Purpose", "ExpiresAt");
                     b.HasIndex("SourceHash", "Purpose", "ExpiresAt");
+
+                    b.HasIndex("UserId", "Purpose", "ExpiresAt");
 
                     b.ToTable("EmailOtps");
                 });
@@ -183,17 +184,23 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("Kind")
                         .HasColumnType("integer");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Name");
 
                     b.ToTable("LegalEntities");
                 });
@@ -212,6 +219,93 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     b.HasKey("LegalEntityId", "UserId");
 
                     b.ToTable("LegalEntityGrants");
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipContribution", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<DateOnly>("EffectiveOn")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("LegalEntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PartyName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LegalEntityId", "EffectiveOn");
+
+                    b.ToTable("OwnershipContributions");
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipParty", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsWorkspaceOwner")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<Guid>("OwnershipSnapshotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Percentage")
+                        .HasPrecision(9, 4)
+                        .HasColumnType("numeric(9,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnershipSnapshotId");
+
+                    b.ToTable("OwnershipParties");
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("LegalEntityId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LegalEntityId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.ToTable("OwnershipSnapshots");
                 });
 
             modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.RefreshToken", b =>
@@ -413,6 +507,33 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipContribution", b =>
+                {
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.LegalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("LegalEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipParty", b =>
+                {
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.OwnershipSnapshot", null)
+                        .WithMany("Parties")
+                        .HasForeignKey("OwnershipSnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipSnapshot", b =>
+                {
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.LegalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("LegalEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
@@ -462,6 +583,11 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipSnapshot", b =>
+                {
+                    b.Navigation("Parties");
                 });
 #pragma warning restore 612, 618
         }

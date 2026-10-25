@@ -1,4 +1,5 @@
 using FinancialPlanner.Api.Auth;
+using FinancialPlanner.Api.LegalEntities;
 using FinancialPlanner.Api.Email;
 using FinancialPlanner.Api;
 using FinancialPlanner.Infrastructure;
@@ -153,6 +154,7 @@ app.MapHealthChecks("/api/health/ready", new HealthCheckOptions
 app.MapControllers();
 app.MapAuthenticationEndpoints();
 app.MapAuthorizationEndpoints();
+app.MapLegalEntityEndpoints();
 if (!isProduction)
 {
     app.MapGet("/api/auth/development/emails/{email}", (string email, DevelopmentAuthenticationEmailSender sender) =>
