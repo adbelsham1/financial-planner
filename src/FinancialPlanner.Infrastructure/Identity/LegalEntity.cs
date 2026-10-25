@@ -20,6 +20,7 @@ public sealed class OwnershipSnapshot
 {
     public Guid Id { get; init; } = Guid.NewGuid();
     public Guid LegalEntityId { get; init; }
+    public Guid? SupersedesOwnershipSnapshotId { get; init; }
     public DateOnly EffectiveFrom { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public ICollection<OwnershipParty> Parties { get; init; } = new List<OwnershipParty>();
@@ -38,6 +39,7 @@ public sealed class OwnershipContribution
 {
     public Guid Id { get; init; } = Guid.NewGuid();
     public Guid LegalEntityId { get; init; }
+    public Guid? ReversesOwnershipContributionId { get; init; }
     public required string PartyName { get; init; }
     public DateOnly EffectiveOn { get; init; }
     public decimal Amount { get; init; }

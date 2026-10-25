@@ -13,13 +13,15 @@ effective-dated and auditable without rewriting historical reports.
 
 Store a joint entity's ownership as append-only, full effective-dated snapshots.
 Each snapshot contains named parties, exactly one workspace-owner party, and
-percentages totalling 100.0000%. Store unequal AUD contributions separately as
-append-only effective-dated records. Corrections are represented by a later
-snapshot or contribution, not mutation or deletion.
+percentages totalling 100.0000%. A correction links to the immutable snapshot
+it supersedes, retaining its original effective date; reporting selects the
+latest revision. Store unequal AUD contributions separately as append-only
+effective-dated records. Correct a contribution through a linked negative
+reversal and, where needed, a replacement positive contribution.
 
 ## Consequences
 
 Historical attribution is stable and report calculations can select the latest
-snapshot effective on a reporting date. Creating a joint entity requires a
-complete ownership allocation, and users must add corrective records instead of
-editing prior history.
+revision effective on a reporting date. Creating a joint entity requires a
+complete ownership allocation, and users must add linked corrective records
+instead of editing prior history.

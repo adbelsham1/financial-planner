@@ -122,17 +122,35 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         Assert.Equal(2, entity.RootElement.GetProperty("ownershipHistory")[0].GetProperty("parties").GetArrayLength());
         Assert.Equal(12500m, entity.RootElement.GetProperty("contributions")[0].GetProperty("amount").GetDecimal());
         Assert.Equal("AUD", entity.RootElement.GetProperty("contributions")[0].GetProperty("currency").GetString());
+        var contributionId = entity.RootElement.GetProperty("contributions")[0].GetProperty("id").GetGuid();
+        var snapshotId = entity.RootElement.GetProperty("ownershipHistory")[0].GetProperty("id").GetGuid();
 
         var replacement = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ownership-snapshots", new
         {
             effectiveFrom = "2026-01-01",
+            supersedesOwnershipSnapshotId = snapshotId,
             parties = new[]
             {
                 new { name = "Taylor Owner", percentage = 50m, isWorkspaceOwner = true },
                 new { name = "Jordan Co-owner", percentage = 50m, isWorkspaceOwner = false }
             }
         });
-        Assert.Equal(HttpStatusCode.Conflict, replacement.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, replacement.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync(
+            $"/api/legal-entities/{entityId}/contributions/{contributionId}/reverse", new
+            {
+                effectiveOn = "2026-02-02"
+            })).StatusCode);
+        var corrected = await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}");
+        Assert.Equal(50m, corrected.GetProperty("ownerAttributablePercentage").GetDecimal());
+        Assert.Equal(-12500m, corrected.GetProperty("contributions")[0].GetProperty("amount").GetDecimal());
+        Assert.Equal(contributionId, corrected.GetProperty("contributions")[0].GetProperty("reversesOwnershipContributionId").GetGuid());
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/contributions", new
+        {
+            partyName = "Taylor Owner",
+            effectiveOn = "2026-03-01",
+            amount = 0.001m
+        })).StatusCode);
 
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"/api/legal-entities/{entityId}/archive", null)).StatusCode);
         Assert.True((await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}"))
@@ -162,6 +180,19 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
             }
         });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var invalidPrecision = await owner.PostAsJsonAsync("/api/legal-entities/", new
+        {
+            name = "Invalid precision",
+            kind = "Joint",
+            effectiveFrom = "2026-01-01",
+            ownershipParties = new[]
+            {
+                new { name = "Taylor Owner", percentage = 33.33335m, isWorkspaceOwner = true },
+                new { name = "Jordan Co-owner", percentage = 66.66665m, isWorkspaceOwner = false }
+            }
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, invalidPrecision.StatusCode);
 
         var create = await owner.PostAsJsonAsync("/api/legal-entities/", new
         {

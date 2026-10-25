@@ -14,8 +14,8 @@ namespace FinancialPlanner.Infrastructure.Migrations
             migrationBuilder.AlterColumn<string>(
                 name: "Name",
                 table: "LegalEntities",
-                type: "character varying(128)",
-                maxLength: 128,
+                type: "character varying(256)",
+                maxLength: 256,
                 nullable: false,
                 oldClrType: typeof(string),
                 oldType: "text");
@@ -32,6 +32,7 @@ namespace FinancialPlanner.Infrastructure.Migrations
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     LegalEntityId = table.Column<Guid>(type: "uuid", nullable: false),
+                    ReversesOwnershipContributionId = table.Column<Guid>(type: "uuid", nullable: true),
                     PartyName = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
                     EffectiveOn = table.Column<DateOnly>(type: "date", nullable: false),
                     Amount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
@@ -47,6 +48,12 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         principalTable: "LegalEntities",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_OwnershipContributions_OwnershipContributions_ReversesOwner~",
+                        column: x => x.ReversesOwnershipContributionId,
+                        principalTable: "OwnershipContributions",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -55,6 +62,7 @@ namespace FinancialPlanner.Infrastructure.Migrations
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     LegalEntityId = table.Column<Guid>(type: "uuid", nullable: false),
+                    SupersedesOwnershipSnapshotId = table.Column<Guid>(type: "uuid", nullable: true),
                     EffectiveFrom = table.Column<DateOnly>(type: "date", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },
@@ -65,6 +73,12 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         name: "FK_OwnershipSnapshots_LegalEntities_LegalEntityId",
                         column: x => x.LegalEntityId,
                         principalTable: "LegalEntities",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_OwnershipSnapshots_OwnershipSnapshots_SupersedesOwnershipSn~",
+                        column: x => x.SupersedesOwnershipSnapshotId,
+                        principalTable: "OwnershipSnapshots",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
                 });
@@ -101,6 +115,11 @@ namespace FinancialPlanner.Infrastructure.Migrations
                 columns: new[] { "LegalEntityId", "EffectiveOn" });
 
             migrationBuilder.CreateIndex(
+                name: "IX_OwnershipContributions_ReversesOwnershipContributionId",
+                table: "OwnershipContributions",
+                column: "ReversesOwnershipContributionId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_OwnershipParties_OwnershipSnapshotId",
                 table: "OwnershipParties",
                 column: "OwnershipSnapshotId");
@@ -108,8 +127,12 @@ namespace FinancialPlanner.Infrastructure.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_OwnershipSnapshots_LegalEntityId_EffectiveFrom",
                 table: "OwnershipSnapshots",
-                columns: new[] { "LegalEntityId", "EffectiveFrom" },
-                unique: true);
+                columns: new[] { "LegalEntityId", "EffectiveFrom" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_OwnershipSnapshots_SupersedesOwnershipSnapshotId",
+                table: "OwnershipSnapshots",
+                column: "SupersedesOwnershipSnapshotId");
         }
 
         /// <inheritdoc />
@@ -138,8 +161,8 @@ namespace FinancialPlanner.Infrastructure.Migrations
                 type: "text",
                 nullable: false,
                 oldClrType: typeof(string),
-                oldType: "character varying(128)",
-                oldMaxLength: 128);
+                oldType: "character varying(256)",
+                oldMaxLength: 256);
         }
     }
 }

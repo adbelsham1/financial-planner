@@ -21,6 +21,8 @@ public static class LegalEntityEndpoints
         group.MapPost("/{legalEntityId:guid}/ownership-snapshots", CreateOwnershipSnapshotAsync)
             .RequireAuthorization("TenantManage");
         group.MapPost("/{legalEntityId:guid}/contributions", CreateContributionAsync).RequireAuthorization("TenantManage");
+        group.MapPost("/{legalEntityId:guid}/contributions/{contributionId:guid}/reverse", ReverseContributionAsync)
+            .RequireAuthorization("TenantManage");
         return endpoints;
     }
 
@@ -74,7 +76,10 @@ public static class LegalEntityEndpoints
         if (snapshot is not null)
         {
             snapshot = snapshot with { LegalEntityId = entity.Id };
-            database.OwnershipSnapshots.Add(snapshot.ToEntity());
+            var ownershipSnapshot = snapshot.ToEntity();
+            database.OwnershipSnapshots.Add(ownershipSnapshot);
+            audit.Add(context, "legal-entity.ownership-snapshot-created", $"ownership-snapshot:{ownershipSnapshot.Id}", "success",
+                tenantId, actorId);
         }
         database.Add(entity);
         database.LegalEntityGrants.Add(new LegalEntityGrant
@@ -136,15 +141,37 @@ public static class LegalEntityEndpoints
         {
             return Results.ValidationProblem(errors);
         }
-        var latestEffectiveFrom = await database.OwnershipSnapshots
-            .Where(item => item.LegalEntityId == entity.Id)
-            .MaxAsync(item => (DateOnly?)item.EffectiveFrom, cancellationToken);
-        if (latestEffectiveFrom is not null && request.EffectiveFrom <= latestEffectiveFrom)
+        var ownershipSnapshot = snapshot!.ToEntity(request.SupersedesOwnershipSnapshotId);
+        if (request.SupersedesOwnershipSnapshotId is not null)
         {
-            return Results.Conflict(new { detail = "A replacement ownership snapshot must take effect after the current history." });
+            var superseded = await database.OwnershipSnapshots.SingleOrDefaultAsync(item =>
+                item.Id == request.SupersedesOwnershipSnapshotId && item.LegalEntityId == entity.Id, cancellationToken);
+            if (superseded is null || superseded.EffectiveFrom != request.EffectiveFrom)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["supersedesOwnershipSnapshotId"] = ["A revision must supersede an ownership snapshot with the same effective date."]
+                });
+            }
+            if (await database.OwnershipSnapshots.AnyAsync(item =>
+                item.SupersedesOwnershipSnapshotId == superseded.Id, cancellationToken))
+            {
+                return Results.Conflict(new { detail = "The selected ownership snapshot has already been superseded." });
+            }
         }
-        database.OwnershipSnapshots.Add(snapshot!.ToEntity());
-        audit.Add(context, "legal-entity.ownership-snapshot-created", $"legal-entity:{entity.Id}", "success", tenantId, actorId);
+        else
+        {
+            var latestEffectiveFrom = await database.OwnershipSnapshots
+                .Where(item => item.LegalEntityId == entity.Id)
+                .MaxAsync(item => (DateOnly?)item.EffectiveFrom, cancellationToken);
+            if (latestEffectiveFrom is not null && request.EffectiveFrom <= latestEffectiveFrom)
+            {
+                return Results.Conflict(new { detail = "A new ownership snapshot must take effect after the current history." });
+            }
+        }
+        database.OwnershipSnapshots.Add(ownershipSnapshot);
+        audit.Add(context, "legal-entity.ownership-snapshot-created", $"ownership-snapshot:{ownershipSnapshot.Id}", "success",
+            tenantId, actorId);
         await database.SaveChangesAsync(cancellationToken);
         return Results.Created($"/api/legal-entities/{entity.Id}", null);
     }
@@ -176,15 +203,51 @@ public static class LegalEntityEndpoints
                 ["partyName"] = ["The contributor must be a party in the ownership snapshot effective on that date."]
             });
         }
-        database.OwnershipContributions.Add(new OwnershipContribution
+        var contribution = new OwnershipContribution
         {
             LegalEntityId = entity.Id,
             PartyName = request.PartyName.Trim(),
             EffectiveOn = request.EffectiveOn,
             Amount = request.Amount,
             Currency = "AUD"
-        });
-        audit.Add(context, "legal-entity.contribution-recorded", $"legal-entity:{entity.Id}", "success", tenantId, actorId);
+        };
+        database.OwnershipContributions.Add(contribution);
+        audit.Add(context, "legal-entity.contribution-recorded", $"ownership-contribution:{contribution.Id}", "success",
+            tenantId, actorId);
+        await database.SaveChangesAsync(cancellationToken);
+        return Results.Created($"/api/legal-entities/{entity.Id}", null);
+    }
+
+    private static async Task<IResult> ReverseContributionAsync(Guid legalEntityId, Guid contributionId,
+        ReverseOwnershipContributionRequest request, ClaimsPrincipal principal, PlannerDbContext database, AuditService audit,
+        HttpContext context, CancellationToken cancellationToken)
+    {
+        if (!TryGetTenant(principal, out var tenantId, out var actorId)) return Results.Forbid();
+        var entity = await FindForTenantAsync(legalEntityId, tenantId, database, cancellationToken);
+        if (entity is null) return Results.NotFound();
+        if (entity.ArchivedAt is not null)
+            return Results.Conflict(new { detail = "Archived legal entities cannot receive new contribution records." });
+        var original = await database.OwnershipContributions.SingleOrDefaultAsync(item =>
+            item.Id == contributionId && item.LegalEntityId == entity.Id, cancellationToken);
+        if (original is null || original.Amount <= 0)
+            return Results.NotFound();
+        if (request.EffectiveOn == DateOnly.MinValue)
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["effectiveOn"] = ["An effective date is required."] });
+        if (await database.OwnershipContributions.AnyAsync(item => item.ReversesOwnershipContributionId == original.Id,
+                cancellationToken))
+            return Results.Conflict(new { detail = "The contribution has already been reversed." });
+        var reversal = new OwnershipContribution
+        {
+            LegalEntityId = entity.Id,
+            ReversesOwnershipContributionId = original.Id,
+            PartyName = original.PartyName,
+            EffectiveOn = request.EffectiveOn,
+            Amount = -original.Amount,
+            Currency = "AUD"
+        };
+        database.OwnershipContributions.Add(reversal);
+        audit.Add(context, "legal-entity.contribution-reversed", $"ownership-contribution:{reversal.Id}", "success",
+            tenantId, actorId);
         await database.SaveChangesAsync(cancellationToken);
         return Results.Created($"/api/legal-entities/{entity.Id}", null);
     }
@@ -205,20 +268,27 @@ public static class LegalEntityEndpoints
     private static bool TryValidateName(string? name, out Dictionary<string, string[]> errors)
     {
         errors = [];
-        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 128) errors["name"] = ["A name of up to 128 characters is required."];
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 256) errors["name"] = ["A name of up to 256 characters is required."];
         return errors.Count == 0;
     }
 
     private static bool TryCreateSnapshot(Guid legalEntityId, DateOnly? effectiveFrom,
-        IReadOnlyList<OwnershipPartyRequest>? parties, out SnapshotDraft? snapshot, out Dictionary<string, string[]> errors)
+        IReadOnlyList<OwnershipPartyRequest?>? parties, out SnapshotDraft? snapshot, out Dictionary<string, string[]> errors)
     {
         errors = [];
         snapshot = null;
         if (effectiveFrom is null) errors["effectiveFrom"] = ["An effective date is required."];
         if (parties is null || parties.Count < 2) errors["parties"] = ["At least two ownership parties are required."];
         if (errors.Count > 0) return false;
-        var suppliedParties = parties!;
-        if (suppliedParties.Any(item => string.IsNullOrWhiteSpace(item.Name) || item.Name.Trim().Length > 128 || item.Percentage <= 0) ||
+        var rawParties = parties!;
+        if (rawParties.Any(item => item is null))
+        {
+            errors["parties"] = ["Ownership parties cannot be null."];
+            return false;
+        }
+        var suppliedParties = rawParties.Cast<OwnershipPartyRequest>().ToList();
+        if (suppliedParties.Any(item => string.IsNullOrWhiteSpace(item.Name) || item.Name.Trim().Length > 128 ||
+                item.Percentage <= 0 || item.Percentage > 100m || !HasAtMostScale(item.Percentage, 4)) ||
             suppliedParties.Count(item => item.IsWorkspaceOwner) != 1 ||
             suppliedParties.Sum(item => item.Percentage) != 100m ||
             suppliedParties.Select(item => item.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != suppliedParties.Count)
@@ -236,9 +306,12 @@ public static class LegalEntityEndpoints
         errors = [];
         if (string.IsNullOrWhiteSpace(request.PartyName) || request.PartyName.Trim().Length > 128)
             errors["partyName"] = ["A party name of up to 128 characters is required."];
-        if (request.Amount <= 0) errors["amount"] = ["A positive AUD contribution amount is required."];
+        if (request.Amount <= 0 || request.Amount > 9_999_999_999_999_999.99m || !HasAtMostScale(request.Amount, 2))
+            errors["amount"] = ["A positive AUD contribution with no more than two decimal places is required."];
         return errors.Count == 0;
     }
+
+    private static bool HasAtMostScale(decimal value, int scale) => value == decimal.Round(value, scale, MidpointRounding.ToZero);
 
     private static async Task<IReadOnlyList<LegalEntityResponse>> ToResponsesAsync(IReadOnlyList<LegalEntity> entities,
         PlannerDbContext database, CancellationToken cancellationToken)
@@ -254,7 +327,10 @@ public static class LegalEntityEndpoints
         return entities.Select(entity =>
         {
             var entitySnapshots = snapshots.Where(item => item.LegalEntityId == entity.Id).ToList();
-            var current = entitySnapshots.FirstOrDefault(item => item.EffectiveFrom <= today);
+            var supersededIds = entitySnapshots.Where(item => item.SupersedesOwnershipSnapshotId is not null)
+                .Select(item => item.SupersedesOwnershipSnapshotId!.Value).ToHashSet();
+            var current = entitySnapshots.Where(item => !supersededIds.Contains(item.Id) && item.EffectiveFrom <= today)
+                .OrderByDescending(item => item.EffectiveFrom).FirstOrDefault();
             var ownerShare = entity.Kind == LegalEntityKind.Joint
                 ? current?.Parties.Single(item => item.IsWorkspaceOwner).Percentage ?? 0m
                 : 100m;
@@ -266,9 +342,10 @@ public static class LegalEntityEndpoints
 
     private sealed record SnapshotDraft(Guid LegalEntityId, DateOnly EffectiveFrom, IReadOnlyList<OwnershipPartyRequest> Parties)
     {
-        public OwnershipSnapshot ToEntity() => new()
+        public OwnershipSnapshot ToEntity(Guid? supersedesOwnershipSnapshotId = null) => new()
         {
             LegalEntityId = LegalEntityId,
+            SupersedesOwnershipSnapshotId = supersedesOwnershipSnapshotId,
             EffectiveFrom = EffectiveFrom,
             Parties = Parties.Select(party => new OwnershipParty
             {
@@ -283,18 +360,22 @@ public static class LegalEntityEndpoints
         decimal LegalOwnershipPercentage, decimal OwnerAttributablePercentage, IReadOnlyList<SnapshotResponse> OwnershipHistory,
         IReadOnlyList<ContributionResponse> Contributions);
 
-    private sealed record SnapshotResponse(DateOnly EffectiveFrom, IReadOnlyList<OwnershipPartyResponse> Parties)
+    private sealed record SnapshotResponse(Guid Id, Guid? SupersedesOwnershipSnapshotId, DateOnly EffectiveFrom,
+        IReadOnlyList<OwnershipPartyResponse> Parties)
     {
         public static SnapshotResponse From(OwnershipSnapshot snapshot) =>
-            new(snapshot.EffectiveFrom, snapshot.Parties.Select(item => new OwnershipPartyResponse(item.Name, item.Percentage,
-                item.IsWorkspaceOwner)).ToList());
+            new(snapshot.Id, snapshot.SupersedesOwnershipSnapshotId, snapshot.EffectiveFrom,
+                snapshot.Parties.Select(item => new OwnershipPartyResponse(item.Name, item.Percentage,
+                    item.IsWorkspaceOwner)).ToList());
     }
 
     private sealed record OwnershipPartyResponse(string Name, decimal Percentage, bool IsWorkspaceOwner);
 
-    private sealed record ContributionResponse(string PartyName, DateOnly EffectiveOn, decimal Amount, string Currency)
+    private sealed record ContributionResponse(Guid Id, Guid? ReversesOwnershipContributionId, string PartyName,
+        DateOnly EffectiveOn, decimal Amount, string Currency)
     {
         public static ContributionResponse From(OwnershipContribution contribution) =>
-            new(contribution.PartyName, contribution.EffectiveOn, contribution.Amount, contribution.Currency);
+            new(contribution.Id, contribution.ReversesOwnershipContributionId, contribution.PartyName,
+                contribution.EffectiveOn, contribution.Amount, contribution.Currency);
     }
 }

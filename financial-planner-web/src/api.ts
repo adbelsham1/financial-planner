@@ -77,8 +77,8 @@ export type LegalEntity = {
   archivedAt: string | null;
   legalOwnershipPercentage: number;
   ownerAttributablePercentage: number;
-  ownershipHistory: { effectiveFrom: string; parties: OwnershipParty[] }[];
-  contributions: { partyName: string; effectiveOn: string; amount: number; currency: string }[];
+  ownershipHistory: { id: string; supersedesOwnershipSnapshotId: string | null; effectiveFrom: string; parties: OwnershipParty[] }[];
+  contributions: { id: string; reversesOwnershipContributionId: string | null; partyName: string; effectiveOn: string; amount: number; currency: string }[];
 };
 
 const entityRequest = async (path: string, method = 'GET', payload?: object) => {
@@ -98,7 +98,9 @@ export const createLegalEntity = async (payload: {
 }) => (await entityRequest('/', 'POST', payload)).json() as Promise<LegalEntity>;
 export const renameLegalEntity = async (id: string, name: string) => entityRequest(`/${id}`, 'PUT', { name });
 export const archiveLegalEntity = async (id: string) => entityRequest(`/${id}/archive`, 'POST');
-export const addOwnershipSnapshot = async (id: string, effectiveFrom: string, parties: OwnershipParty[]) =>
-  entityRequest(`/${id}/ownership-snapshots`, 'POST', { effectiveFrom, parties });
+export const addOwnershipSnapshot = async (id: string, effectiveFrom: string, parties: OwnershipParty[], supersedesOwnershipSnapshotId?: string) =>
+  entityRequest(`/${id}/ownership-snapshots`, 'POST', { effectiveFrom, parties, supersedesOwnershipSnapshotId });
 export const addContribution = async (id: string, partyName: string, effectiveOn: string, amount: number) =>
   entityRequest(`/${id}/contributions`, 'POST', { partyName, effectiveOn, amount });
+export const reverseContribution = async (id: string, contributionId: string, effectiveOn: string) =>
+  entityRequest(`/${id}/contributions/${contributionId}/reverse`, 'POST', { effectiveOn });

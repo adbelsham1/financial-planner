@@ -26,10 +26,12 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         builder.Entity<TenantMembership>().HasKey(item => new { item.TenantId, item.UserId });
         builder.Entity<LegalEntityGrant>().HasKey(item => new { item.LegalEntityId, item.UserId });
         builder.Entity<LegalEntity>().HasIndex(item => new { item.TenantId, item.Name });
-        builder.Entity<LegalEntity>().Property(item => item.Name).HasMaxLength(128);
-        builder.Entity<OwnershipSnapshot>().HasIndex(item => new { item.LegalEntityId, item.EffectiveFrom }).IsUnique();
+        builder.Entity<LegalEntity>().Property(item => item.Name).HasMaxLength(256);
+        builder.Entity<OwnershipSnapshot>().HasIndex(item => new { item.LegalEntityId, item.EffectiveFrom });
         builder.Entity<OwnershipSnapshot>().HasOne<LegalEntity>().WithMany()
             .HasForeignKey(item => item.LegalEntityId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<OwnershipSnapshot>().HasOne<OwnershipSnapshot>().WithMany()
+            .HasForeignKey(item => item.SupersedesOwnershipSnapshotId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<OwnershipSnapshot>().HasMany(item => item.Parties).WithOne()
             .HasForeignKey(item => item.OwnershipSnapshotId).OnDelete(DeleteBehavior.Cascade);
         builder.Entity<OwnershipParty>().Property(item => item.Name).HasMaxLength(128);
@@ -37,6 +39,8 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         builder.Entity<OwnershipContribution>().HasIndex(item => new { item.LegalEntityId, item.EffectiveOn });
         builder.Entity<OwnershipContribution>().HasOne<LegalEntity>().WithMany()
             .HasForeignKey(item => item.LegalEntityId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<OwnershipContribution>().HasOne<OwnershipContribution>().WithMany()
+            .HasForeignKey(item => item.ReversesOwnershipContributionId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<OwnershipContribution>().Property(item => item.PartyName).HasMaxLength(128);
         builder.Entity<OwnershipContribution>().Property(item => item.Amount).HasPrecision(18, 2);
         builder.Entity<OwnershipContribution>().Property(item => item.Currency).HasMaxLength(3);

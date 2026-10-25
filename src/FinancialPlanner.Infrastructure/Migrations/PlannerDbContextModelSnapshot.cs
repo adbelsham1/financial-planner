@@ -192,8 +192,8 @@ namespace FinancialPlanner.Infrastructure.Migrations
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
@@ -250,7 +250,12 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<Guid?>("ReversesOwnershipContributionId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("ReversesOwnershipContributionId");
 
                     b.HasIndex("LegalEntityId", "EffectiveOn");
 
@@ -300,10 +305,14 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     b.Property<Guid>("LegalEntityId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("SupersedesOwnershipSnapshotId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("LegalEntityId", "EffectiveFrom")
-                        .IsUnique();
+                    b.HasIndex("SupersedesOwnershipSnapshotId");
+
+                    b.HasIndex("LegalEntityId", "EffectiveFrom");
 
                     b.ToTable("OwnershipSnapshots");
                 });
@@ -514,6 +523,11 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .HasForeignKey("LegalEntityId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.OwnershipContribution", null)
+                        .WithMany()
+                        .HasForeignKey("ReversesOwnershipContributionId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipParty", b =>
@@ -532,6 +546,11 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .HasForeignKey("LegalEntityId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.OwnershipSnapshot", null)
+                        .WithMany()
+                        .HasForeignKey("SupersedesOwnershipSnapshotId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
