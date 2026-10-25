@@ -68,3 +68,39 @@ export const currentUser = async (): Promise<{ tenantId: string; userId: string;
   if (!response.ok) throw new Error('Not authenticated.');
   return response.json() as Promise<{ tenantId: string; userId: string; role: string }>;
 };
+
+export type OwnershipParty = { name: string; percentage: number; isWorkspaceOwner: boolean };
+export type LegalEntity = {
+  id: string;
+  name: string;
+  kind: string;
+  archivedAt: string | null;
+  legalOwnershipPercentage: number;
+  ownerAttributablePercentage: number;
+  ownershipHistory: { id: string; supersedesOwnershipSnapshotId: string | null; effectiveFrom: string; parties: OwnershipParty[] }[];
+  contributions: { id: string; reversesOwnershipContributionId: string | null; partyName: string; effectiveOn: string; amount: number; currency: string }[];
+};
+
+const entityRequest = async (path: string, method = 'GET', payload?: object) => {
+  const response = await fetch(`${apiBaseUrl}/legal-entities${path}`, {
+    method,
+    headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+    body: payload ? JSON.stringify(payload) : undefined,
+    credentials: 'include',
+  });
+  if (!response.ok) throw new Error(`Legal entity request failed: ${response.status}`);
+  return response;
+};
+
+export const legalEntities = async () => (await entityRequest('/')).json() as Promise<LegalEntity[]>;
+export const createLegalEntity = async (payload: {
+  name: string; kind: string; effectiveFrom?: string; ownershipParties?: OwnershipParty[];
+}) => (await entityRequest('/', 'POST', payload)).json() as Promise<LegalEntity>;
+export const renameLegalEntity = async (id: string, name: string) => entityRequest(`/${id}`, 'PUT', { name });
+export const archiveLegalEntity = async (id: string) => entityRequest(`/${id}/archive`, 'POST');
+export const addOwnershipSnapshot = async (id: string, effectiveFrom: string, parties: OwnershipParty[], supersedesOwnershipSnapshotId?: string) =>
+  entityRequest(`/${id}/ownership-snapshots`, 'POST', { effectiveFrom, parties, supersedesOwnershipSnapshotId });
+export const addContribution = async (id: string, partyName: string, effectiveOn: string, amount: number) =>
+  entityRequest(`/${id}/contributions`, 'POST', { partyName, effectiveOn, amount });
+export const reverseContribution = async (id: string, contributionId: string, effectiveOn: string) =>
+  entityRequest(`/${id}/contributions/${contributionId}/reverse`, 'POST', { effectiveOn });
