@@ -128,6 +128,10 @@ public static class LegalEntityEndpoints
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["legalEntityId"] = ["Ownership is only recorded for joint entities."] });
         }
+        if (entity.ArchivedAt is not null)
+        {
+            return Results.Conflict(new { detail = "Archived legal entities cannot receive new ownership records." });
+        }
         if (!TryCreateSnapshot(entity.Id, request.EffectiveFrom, request.Parties, out var snapshot, out var errors))
         {
             return Results.ValidationProblem(errors);
@@ -155,6 +159,10 @@ public static class LegalEntityEndpoints
         if (entity.Kind != LegalEntityKind.Joint)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["legalEntityId"] = ["Contributions are only recorded for joint entities."] });
+        }
+        if (entity.ArchivedAt is not null)
+        {
+            return Results.Conflict(new { detail = "Archived legal entities cannot receive new contribution records." });
         }
         if (!TryValidateContribution(request, out var errors)) return Results.ValidationProblem(errors);
         var snapshot = await database.OwnershipSnapshots.Include(item => item.Parties)

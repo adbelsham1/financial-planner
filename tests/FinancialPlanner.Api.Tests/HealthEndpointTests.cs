@@ -137,6 +137,12 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"/api/legal-entities/{entityId}/archive", null)).StatusCode);
         Assert.True((await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}"))
             .GetProperty("archivedAt").ValueKind != JsonValueKind.Null);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/contributions", new
+        {
+            partyName = "Jordan Co-owner",
+            effectiveOn = "2026-03-01",
+            amount = 100m
+        })).StatusCode);
     }
 
     [Fact]
