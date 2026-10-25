@@ -24,7 +24,7 @@ const App = () => {
   const [journals, setJournals] = useState<LedgerJournal[]>([]);
   const [balance, setBalance] = useState<TrialBalance>();
   const [auditEntries, setAuditEntries] = useState<{ action: string; occurredAt: string }[]>([]);
-  const selectedEntityRef = useRef<string>();
+  const selectedEntityRef = useRef<string | undefined>(undefined);
 
   const loadEntities = async () => setEntities(await legalEntities());
   const clearLedger = () => {
@@ -178,9 +178,9 @@ const App = () => {
   const recordLedgerJournal = async (event: FormEvent<HTMLFormElement>, entity: LegalEntity, opening: boolean) => {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     const debitAccountId = String(form.get('debitAccountId')); const creditAccountId = String(form.get('creditAccountId'));
-    const amount = Number(form.get('amount')); const lines = [
-      { accountId: debitAccountId, debit: amount, credit: 0, gstTaxTreatment: String(form.get('gstTaxTreatment')) },
-      { accountId: creditAccountId, debit: 0, credit: amount, gstTaxTreatment: String(form.get('gstTaxTreatment')) },
+    const amount = String(form.get('amount')); const lines = [
+      { accountId: debitAccountId, debit: amount, credit: '0', gstTaxTreatment: String(form.get('gstTaxTreatment')) },
+      { accountId: creditAccountId, debit: '0', credit: amount, gstTaxTreatment: String(form.get('gstTaxTreatment')) },
     ];
     try {
       if (opening) await createOpeningBalance(entity.id, {
@@ -302,7 +302,7 @@ const App = () => {
               </TextField>
               <Button type="submit">Create account</Button>
             </Stack>}
-            {accounts.some((account) => account.type === 'Equity' && !account.archivedAt) && <Stack component="form" spacing={1} onSubmit={(event) => recordLedgerJournal(event, entity, true)}>
+            {!entity.archivedAt && accounts.some((account) => account.type === 'Equity' && !account.archivedAt) && <Stack component="form" spacing={1} onSubmit={(event) => recordLedgerJournal(event, entity, true)}>
               <Typography variant="subtitle2">Record opening balance</Typography>
               <TextField required label="Opening balance date" name="effectiveOn" type="date" slotProps={{ inputLabel: { shrink: true } }} />
               <TextField required label="Opening balance description" name="description" />
@@ -327,8 +327,8 @@ const App = () => {
               <Typography>{journal.effectiveOn}: {journal.description} ({journal.status})</Typography>
               {journal.lines.map((line) => <Typography key={line.id} color="text.secondary">{line.accountCode} · Dr {line.debit} · Cr {line.credit} · {line.gstTaxTreatment} {line.gstRate * 100}%</Typography>)}
               <Stack direction="row" spacing={1}>
-                {journal.status === 'Draft' && <Button onClick={() => approveJournal(entity, journal.id)}>Approve journal</Button>}
-                {journal.status === 'Approved' && !journal.reversesJournalId && <Stack component="form" direction="row" spacing={1} onSubmit={(event) => {
+                {!entity.archivedAt && journal.status === 'Draft' && <Button onClick={() => approveJournal(entity, journal.id)}>Approve journal</Button>}
+                {!entity.archivedAt && journal.status === 'Approved' && !journals.some((item) => item.reversesJournalId === journal.id) && <Stack component="form" direction="row" spacing={1} onSubmit={(event) => {
                   event.preventDefault(); reverseJournal(entity, journal, String(new FormData(event.currentTarget).get('effectiveOn')));
                 }}><TextField required label="Reversal date" name="effectiveOn" type="date" slotProps={{ inputLabel: { shrink: true } }} /><Button type="submit">Reverse journal</Button></Stack>}
                 <Button onClick={() => loadAudit(entity.id, journal.id).catch(() => setError('We could not load the audit history.'))}>View audit history</Button>

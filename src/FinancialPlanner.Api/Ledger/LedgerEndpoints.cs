@@ -199,14 +199,16 @@ public static class LedgerEndpoints
         LegalEntityAccessService access, PlannerDbContext database, CancellationToken cancellationToken)
     {
         if (!await access.CanAccessAsync(principal, legalEntityId, TenantCapability.Read, cancellationToken)) return Results.NotFound();
-        var lines = await database.LedgerJournalLines.AsNoTracking().Where(line =>
+        var totals = await database.LedgerJournalLines.AsNoTracking().Where(line =>
             database.LedgerJournals.Any(journal => journal.Id == line.LedgerJournalId && journal.LegalEntityId == legalEntityId &&
                 journal.Status == LedgerJournalStatus.Approved && journal.EffectiveOn <= asOf))
-            .ToListAsync(cancellationToken);
+            .GroupBy(line => line.LedgerAccountId)
+            .Select(group => new TrialBalanceTotal(group.Key, group.Sum(line => line.Debit), group.Sum(line => line.Credit)))
+            .ToDictionaryAsync(item => item.AccountId, cancellationToken);
         var accounts = await database.LedgerAccounts.AsNoTracking().Where(item => item.LegalEntityId == legalEntityId).ToListAsync(cancellationToken);
         var rows = accounts.Select(account =>
         {
-            var net = lines.Where(line => line.LedgerAccountId == account.Id).Sum(line => line.Debit - line.Credit);
+            var net = totals.TryGetValue(account.Id, out var total) ? total.Debit - total.Credit : 0m;
             return new TrialBalanceRow(account.Id, account.Code, account.Name, account.Type.ToString(),
                 net > 0 ? net : 0, net < 0 ? -net : 0);
         })
@@ -347,5 +349,6 @@ public static class LedgerEndpoints
         string GstTaxTreatment, decimal GstRate);
     private sealed record AuditResponse(string Action, Guid? ActorId, DateTimeOffset OccurredAt, string Outcome);
     private sealed record TrialBalanceRow(Guid AccountId, string Code, string Name, string Type, decimal Debit, decimal Credit);
+    private sealed record TrialBalanceTotal(Guid AccountId, decimal Debit, decimal Credit);
     private sealed record TrialBalanceResponse(DateOnly AsOf, IReadOnlyList<TrialBalanceRow> Accounts, decimal TotalDebits, decimal TotalCredits);
 }

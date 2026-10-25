@@ -121,6 +121,7 @@ test('owner can post, approve, reverse, and review a manual ledger', async ({ pa
   await salaryJournal.getByLabel('Reversal date').fill('2026-01-03');
   await salaryJournal.getByRole('button', { name: 'Reverse journal' }).click();
   await expect(page.getByText('Linked reversal draft created.')).toBeVisible();
+  await expect(salaryJournal.getByRole('button', { name: 'Reverse journal' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Approve journal' }).click();
   await page.getByLabel('Trial balance as of').fill('2026-12-31');
   await page.getByRole('button', { name: 'Review trial balance' }).click();

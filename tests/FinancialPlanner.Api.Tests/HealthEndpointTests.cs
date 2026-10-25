@@ -271,6 +271,20 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
 
+        var exactAmount = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/journals", new
+        {
+            effectiveOn = "2026-01-02",
+            description = "Exact decimal",
+            lines = new[]
+            {
+                new { accountId = cash, debit = "100000000000000.01", credit = "0", gstTaxTreatment = "BasExcluded" },
+                new { accountId = income, debit = "0", credit = "100000000000000.01", gstTaxTreatment = "BasExcluded" }
+            }
+        });
+        Assert.Equal(HttpStatusCode.Created, exactAmount.StatusCode);
+        using var exactAmountDocument = JsonDocument.Parse(await exactAmount.Content.ReadAsStringAsync());
+        Assert.Equal(100000000000000.01m, exactAmountDocument.RootElement.GetProperty("lines")[0].GetProperty("debit").GetDecimal());
+
         var journal = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/journals", new
         {
             effectiveOn = "2026-01-02",
@@ -297,6 +311,12 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         using var reversalDocument = JsonDocument.Parse(await reversal.Content.ReadAsStringAsync());
         var reversalId = reversalDocument.RootElement.GetProperty("id").GetGuid();
         Assert.Equal(journalId, reversalDocument.RootElement.GetProperty("reversesJournalId").GetGuid());
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/journals/{journalId}/reverse", new
+        {
+            effectiveOn = "2026-01-03",
+            description = "Duplicate reversal",
+            lines = Array.Empty<object>()
+        })).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
             $"/api/legal-entities/{entityId}/ledger/journals/{reversalId}/approve", null)).StatusCode);
 
