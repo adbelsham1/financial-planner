@@ -53,7 +53,8 @@ public sealed class LegalEntityAccessService(PlannerDbContext database)
         var role = await database.TenantMemberships.Where(x => x.UserId == userId && x.TenantId == tenantId)
             .Select(x => (TenantRole?)x.Role).SingleOrDefaultAsync(cancellationToken);
         if (role is null || !TenantCapabilityHandler.Allows(role.Value, capability)) return false;
-        return await database.LegalEntityGrants.AnyAsync(x => x.UserId == userId && x.LegalEntityId == legalEntityId &&
-            TenantCapabilityHandler.Allows(x.Role, capability), cancellationToken);
+        var grantRole = await database.LegalEntityGrants.Where(x => x.UserId == userId && x.LegalEntityId == legalEntityId)
+            .Select(x => (TenantRole?)x.Role).SingleOrDefaultAsync(cancellationToken);
+        return grantRole is not null && TenantCapabilityHandler.Allows(grantRole.Value, capability);
     }
 }

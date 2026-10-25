@@ -104,3 +104,42 @@ export const addContribution = async (id: string, partyName: string, effectiveOn
   entityRequest(`/${id}/contributions`, 'POST', { partyName, effectiveOn, amount });
 export const reverseContribution = async (id: string, contributionId: string, effectiveOn: string) =>
   entityRequest(`/${id}/contributions/${contributionId}/reverse`, 'POST', { effectiveOn });
+
+export type LedgerAccount = { id: string; code: string; name: string; type: string; archivedAt: string | null };
+export type LedgerJournal = {
+  id: string; type: string; status: string; currency: string; effectiveOn: string; description: string;
+  reversesJournalId: string | null; adjustsJournalId: string | null;
+  lines: { id: string; accountId: string; accountCode: string; accountName: string; debit: number; credit: number; gstTaxTreatment: string; gstRate: number }[];
+};
+export type TrialBalance = {
+  asOf: string; totalDebits: number; totalCredits: number;
+  accounts: { accountId: string; code: string; name: string; type: string; debit: number; credit: number }[];
+};
+
+const ledgerRequest = async (entityId: string, path: string, method = 'GET', payload?: object) => {
+  const response = await fetch(`${apiBaseUrl}/legal-entities/${entityId}/ledger${path}`, {
+    method, headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+    body: payload ? JSON.stringify(payload) : undefined, credentials: 'include',
+  });
+  if (!response.ok) throw new Error(`Ledger request failed: ${response.status}`);
+  return response;
+};
+
+export const ledgerAccounts = async (entityId: string) =>
+  (await ledgerRequest(entityId, '/accounts')).json() as Promise<LedgerAccount[]>;
+export const ledgerJournals = async (entityId: string) =>
+  (await ledgerRequest(entityId, '/journals')).json() as Promise<LedgerJournal[]>;
+export const createLedgerAccount = async (entityId: string, code: string, name: string, type: string) =>
+  (await ledgerRequest(entityId, '/accounts', 'POST', { code, name, type })).json() as Promise<LedgerAccount>;
+export const createLedgerJournal = async (entityId: string, payload: object) =>
+  (await ledgerRequest(entityId, '/journals', 'POST', payload)).json() as Promise<LedgerJournal>;
+export const createOpeningBalance = async (entityId: string, payload: object) =>
+  (await ledgerRequest(entityId, '/opening-balances', 'POST', payload)).json() as Promise<LedgerJournal>;
+export const approveLedgerJournal = async (entityId: string, journalId: string) =>
+  (await ledgerRequest(entityId, `/journals/${journalId}/approve`, 'POST')).json() as Promise<LedgerJournal>;
+export const reverseLedgerJournal = async (entityId: string, journalId: string, effectiveOn: string, description: string) =>
+  (await ledgerRequest(entityId, `/journals/${journalId}/reverse`, 'POST', { effectiveOn, description, lines: [] })).json() as Promise<LedgerJournal>;
+export const ledgerAudit = async (entityId: string, journalId: string) =>
+  (await ledgerRequest(entityId, `/journals/${journalId}/audit`)).json() as Promise<{ action: string; occurredAt: string }[]>;
+export const trialBalance = async (entityId: string, asOf: string) =>
+  (await ledgerRequest(entityId, `/trial-balance?asOf=${encodeURIComponent(asOf)}`)).json() as Promise<TrialBalance>;
