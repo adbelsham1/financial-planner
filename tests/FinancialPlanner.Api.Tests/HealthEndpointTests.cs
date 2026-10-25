@@ -215,6 +215,98 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         Assert.Equal(HttpStatusCode.NotFound, (await anotherOwner.GetAsync($"/api/legal-entities/{entityId}")).StatusCode);
     }
 
+    [Fact]
+    public async Task Owner_can_record_an_auditable_balanced_ledger_and_correct_it_without_mutation()
+    {
+        using var client = factory.CreateClient();
+        await RegisterAndSignInAsync(client);
+        var entityResponse = await client.PostAsJsonAsync("/api/legal-entities/", new
+        {
+            name = "Ledger household",
+            kind = "Personal",
+            effectiveFrom = (string?)null,
+            ownershipParties = (object?)null
+        });
+        using var entityDocument = JsonDocument.Parse(await entityResponse.Content.ReadAsStringAsync());
+        var entityId = entityDocument.RootElement.GetProperty("id").GetGuid();
+
+        async Task<Guid> CreateAccountAsync(string code, string name, string type)
+        {
+            var response = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/accounts", new { code, name, type });
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            using var account = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return account.RootElement.GetProperty("id").GetGuid();
+        }
+
+        var cash = await CreateAccountAsync("1000", "Cash at bank", "Asset");
+        var openingEquity = await CreateAccountAsync("3000", "Opening Balance Equity", "Equity");
+        var income = await CreateAccountAsync("4000", "Salary income", "Income");
+        var opening = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/opening-balances", new
+        {
+            effectiveOn = "2026-01-01",
+            description = "Opening cash balance",
+            openingBalanceEquityAccountId = openingEquity,
+            lines = new[]
+            {
+                new { accountId = cash, debit = 1000m, credit = 0m, gstTaxTreatment = "BasExcluded" },
+                new { accountId = openingEquity, debit = 0m, credit = 1000m, gstTaxTreatment = "BasExcluded" }
+            }
+        });
+        Assert.Equal(HttpStatusCode.Created, opening.StatusCode);
+        using var openingDocument = JsonDocument.Parse(await opening.Content.ReadAsStringAsync());
+        var openingId = openingDocument.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
+            $"/api/legal-entities/{entityId}/ledger/journals/{openingId}/approve", null)).StatusCode);
+
+        var invalid = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/journals", new
+        {
+            effectiveOn = "2026-01-02",
+            description = "Unbalanced",
+            lines = new[]
+            {
+                new { accountId = cash, debit = 100m, credit = 0m, gstTaxTreatment = "Taxable" },
+                new { accountId = income, debit = 0m, credit = 99m, gstTaxTreatment = "Taxable" }
+            }
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var journal = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/journals", new
+        {
+            effectiveOn = "2026-01-02",
+            description = "Salary received",
+            lines = new[]
+            {
+                new { accountId = cash, debit = 200m, credit = 0m, gstTaxTreatment = "BasExcluded" },
+                new { accountId = income, debit = 0m, credit = 200m, gstTaxTreatment = "BasExcluded" }
+            }
+        });
+        Assert.Equal(HttpStatusCode.Created, journal.StatusCode);
+        using var journalDocument = JsonDocument.Parse(await journal.Content.ReadAsStringAsync());
+        var journalId = journalDocument.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
+            $"/api/legal-entities/{entityId}/ledger/journals/{journalId}/approve", null)).StatusCode);
+
+        var reversal = await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/ledger/journals/{journalId}/reverse", new
+        {
+            effectiveOn = "2026-01-03",
+            description = "Reverse salary error",
+            lines = Array.Empty<object>()
+        });
+        Assert.Equal(HttpStatusCode.Created, reversal.StatusCode);
+        using var reversalDocument = JsonDocument.Parse(await reversal.Content.ReadAsStringAsync());
+        var reversalId = reversalDocument.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal(journalId, reversalDocument.RootElement.GetProperty("reversesJournalId").GetGuid());
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
+            $"/api/legal-entities/{entityId}/ledger/journals/{reversalId}/approve", null)).StatusCode);
+
+        var audit = await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}/ledger/journals/{journalId}/audit");
+        Assert.Contains(audit.EnumerateArray(), item => item.GetProperty("action").GetString() == "ledger.journal-created");
+        Assert.Contains(audit.EnumerateArray(), item => item.GetProperty("action").GetString() == "ledger.journal-approved");
+        var trialBalance = await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}/ledger/trial-balance?asOf=2026-01-03");
+        Assert.Equal(trialBalance.GetProperty("totalDebits").GetDecimal(), trialBalance.GetProperty("totalCredits").GetDecimal());
+        Assert.Equal(1400m, trialBalance.GetProperty("totalDebits").GetDecimal());
+    }
+
     private static async Task RegisterAndSignInAsync(HttpClient client)
     {
         var email = $"owner-{Guid.NewGuid():N}@example.com";

@@ -386,6 +386,138 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     b.ToTable("TenantMemberships");
                 });
 
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerAccount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("LegalEntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LegalEntityId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "LegalEntityId");
+
+                    b.ToTable("LedgerAccounts");
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerJournal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AdjustsJournalId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateOnly>("EffectiveOn")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("LegalEntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ReversesJournalId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AdjustsJournalId");
+
+                    b.HasIndex("ReversesJournalId");
+
+                    b.HasIndex("LegalEntityId", "EffectiveOn", "Status");
+
+                    b.ToTable("LedgerJournals");
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerJournalLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Credit")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("Debit")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("GstRate")
+                        .HasPrecision(5, 4)
+                        .HasColumnType("numeric(5,4)");
+
+                    b.Property<int>("GstTaxTreatment")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("LedgerAccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("LedgerJournalId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LedgerAccountId");
+
+                    b.HasIndex("LedgerJournalId");
+
+                    b.ToTable("LedgerJournalLines");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", b =>
                 {
                     b.Property<Guid>("Id")
@@ -553,6 +685,49 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerAccount", b =>
+                {
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.LegalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("LegalEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerJournal", b =>
+                {
+                    b.HasOne("FinancialPlanner.Infrastructure.Ledger.LedgerJournal", null)
+                        .WithMany()
+                        .HasForeignKey("AdjustsJournalId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FinancialPlanner.Infrastructure.Identity.LegalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("LegalEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FinancialPlanner.Infrastructure.Ledger.LedgerJournal", null)
+                        .WithMany()
+                        .HasForeignKey("ReversesJournalId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerJournalLine", b =>
+                {
+                    b.HasOne("FinancialPlanner.Infrastructure.Ledger.LedgerAccount", null)
+                        .WithMany()
+                        .HasForeignKey("LedgerAccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FinancialPlanner.Infrastructure.Ledger.LedgerJournal", null)
+                        .WithMany("Lines")
+                        .HasForeignKey("LedgerJournalId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
@@ -607,6 +782,11 @@ namespace FinancialPlanner.Infrastructure.Migrations
             modelBuilder.Entity("FinancialPlanner.Infrastructure.Identity.OwnershipSnapshot", b =>
                 {
                     b.Navigation("Parties");
+                });
+
+            modelBuilder.Entity("FinancialPlanner.Infrastructure.Ledger.LedgerJournal", b =>
+                {
+                    b.Navigation("Lines");
                 });
 #pragma warning restore 612, 618
         }

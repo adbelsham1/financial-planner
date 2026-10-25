@@ -71,3 +71,53 @@ test('invalid OTP does not authenticate', async ({ page, request }) => {
   await page.getByRole('button', { name: 'Verify and sign in' }).click();
   await expect(page.getByText('We could not complete that request.')).toBeVisible();
 });
+
+test('owner can post, approve, reverse, and review a manual ledger', async ({ page, request }) => {
+  const email = `ledger-${Date.now()}@example.test`;
+  const password = 'A-long-enough-password1!';
+  await request.post(`${api}/auth/register`, { data: { displayName: 'Ledger Owner', email, password, workspaceName: 'Ledger Workspace' } });
+  await request.post(`${api}/auth/verify-email`, { data: { email, code: await latestCode(request, email) } });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Already have an account? Sign in' }).click();
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Verification code').fill(await latestCode(request, email));
+  await page.getByRole('button', { name: 'Verify and sign in' }).click();
+
+  await page.getByLabel('Entity name').fill('Ledger household');
+  await page.getByRole('button', { name: 'Create legal entity' }).click();
+  const entity = page.getByRole('heading', { name: 'Ledger household' }).locator('..');
+  await entity.getByRole('button', { name: 'View history' }).click();
+
+  await page.getByLabel('Account code').fill('1000');
+  await page.getByLabel('Account name').fill('Cash at bank');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.getByLabel('Account code').fill('3000');
+  await page.getByLabel('Account name').fill('Opening Balance Equity');
+  await page.getByLabel('Account type').click();
+  await page.getByRole('option', { name: 'Equity' }).click();
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.getByLabel('Account code').fill('4000');
+  await page.getByLabel('Account name').fill('Salary income');
+  await page.getByLabel('Account type').click();
+  await page.getByRole('option', { name: 'Income' }).click();
+  await page.getByRole('button', { name: 'Create account' }).click();
+
+  await page.getByLabel('Opening balance date').fill('2026-01-01');
+  await page.getByLabel('Opening balance description').fill('Opening cash');
+  await page.getByLabel('Opening balance amount (AUD)').fill('1000');
+  await page.getByRole('button', { name: 'Create opening balance draft' }).click();
+  await page.getByRole('button', { name: 'Approve journal' }).first().click();
+  await page.getByLabel('Journal date').fill('2026-01-02');
+  await page.getByLabel('Journal description').fill('Salary received');
+  await page.getByLabel('Journal amount (AUD)').fill('200');
+  await page.getByRole('button', { name: 'Create manual journal draft' }).click();
+  await page.getByRole('button', { name: 'Approve journal' }).click();
+  await page.getByRole('button', { name: 'Reverse journal' }).last().click();
+  await expect(page.getByText('Linked reversal draft created.')).toBeVisible();
+  await page.getByRole('button', { name: 'Approve journal' }).click();
+  await page.getByLabel('Trial balance as of').fill('2026-12-31');
+  await page.getByRole('button', { name: 'Review trial balance' }).click();
+  await expect(page.getByText('Total · Dr 1400 · Cr 1400')).toBeVisible();
+});

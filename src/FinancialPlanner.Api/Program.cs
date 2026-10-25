@@ -1,5 +1,6 @@
 using FinancialPlanner.Api.Auth;
 using FinancialPlanner.Api.LegalEntities;
+using FinancialPlanner.Api.Ledger;
 using FinancialPlanner.Api.Email;
 using FinancialPlanner.Api;
 using FinancialPlanner.Infrastructure;
@@ -155,6 +156,7 @@ app.MapControllers();
 app.MapAuthenticationEndpoints();
 app.MapAuthorizationEndpoints();
 app.MapLegalEntityEndpoints();
+app.MapLedgerEndpoints();
 if (!isProduction)
 {
     app.MapGet("/api/auth/development/emails/{email}", (string email, DevelopmentAuthenticationEmailSender sender) =>

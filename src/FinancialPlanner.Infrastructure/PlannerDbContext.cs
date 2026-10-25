@@ -1,4 +1,5 @@
 using FinancialPlanner.Infrastructure.Identity;
+using FinancialPlanner.Infrastructure.Ledger;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,9 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
     public DbSet<EmailOtp> EmailOtps => Set<EmailOtp>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<LedgerAccount> LedgerAccounts => Set<LedgerAccount>();
+    public DbSet<LedgerJournal> LedgerJournals => Set<LedgerJournal>();
+    public DbSet<LedgerJournalLine> LedgerJournalLines => Set<LedgerJournalLine>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -53,6 +57,27 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         builder.Entity<AuditEvent>().Property(item => item.Action).HasMaxLength(128);
         builder.Entity<AuditEvent>().Property(item => item.Target).HasMaxLength(256);
         builder.Entity<AuditEvent>().Property(item => item.CorrelationId).HasMaxLength(128);
+        builder.Entity<LedgerAccount>().HasIndex(item => new { item.LegalEntityId, item.Code }).IsUnique();
+        builder.Entity<LedgerAccount>().HasIndex(item => new { item.TenantId, item.LegalEntityId });
+        builder.Entity<LedgerAccount>().Property(item => item.Code).HasMaxLength(32);
+        builder.Entity<LedgerAccount>().Property(item => item.Name).HasMaxLength(256);
+        builder.Entity<LedgerAccount>().HasOne<LegalEntity>().WithMany()
+            .HasForeignKey(item => item.LegalEntityId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LedgerJournal>().HasIndex(item => new { item.LegalEntityId, item.EffectiveOn, item.Status });
+        builder.Entity<LedgerJournal>().Property(item => item.Description).HasMaxLength(512);
+        builder.Entity<LedgerJournal>().HasOne<LegalEntity>().WithMany()
+            .HasForeignKey(item => item.LegalEntityId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LedgerJournal>().HasOne<LedgerJournal>().WithMany()
+            .HasForeignKey(item => item.ReversesJournalId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LedgerJournal>().HasOne<LedgerJournal>().WithMany()
+            .HasForeignKey(item => item.AdjustsJournalId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LedgerJournal>().HasMany(item => item.Lines).WithOne()
+            .HasForeignKey(item => item.LedgerJournalId).OnDelete(DeleteBehavior.Cascade);
+        builder.Entity<LedgerJournalLine>().HasOne<LedgerAccount>().WithMany()
+            .HasForeignKey(item => item.LedgerAccountId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LedgerJournalLine>().Property(item => item.Debit).HasPrecision(18, 2);
+        builder.Entity<LedgerJournalLine>().Property(item => item.Credit).HasPrecision(18, 2);
+        builder.Entity<LedgerJournalLine>().Property(item => item.GstRate).HasPrecision(5, 4);
     }
 
     public override int SaveChanges()
@@ -72,9 +97,13 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         if (ChangeTracker.Entries<AuditEvent>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<OwnershipSnapshot>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<OwnershipParty>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
-            ChangeTracker.Entries<OwnershipContribution>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted))
+            ChangeTracker.Entries<OwnershipContribution>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
+            ChangeTracker.Entries<LedgerJournalLine>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
+            ChangeTracker.Entries<LedgerJournal>().Any(entry => entry.State is EntityState.Deleted ||
+                entry.State is EntityState.Modified && entry.OriginalValues.GetValue<LedgerJournalStatus>(
+                    nameof(LedgerJournal.Status)) == LedgerJournalStatus.Approved))
         {
-            throw new InvalidOperationException("Audit events, ownership snapshots, and contributions are append-only.");
+            throw new InvalidOperationException("Audit events, ownership records, approved journals, and journal lines are append-only.");
         }
     }
 }
