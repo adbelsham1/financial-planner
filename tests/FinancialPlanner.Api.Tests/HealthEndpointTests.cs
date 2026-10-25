@@ -132,7 +132,7 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
             parties = new[]
             {
                 new { name = "Taylor Owner", percentage = 50m, isWorkspaceOwner = true },
-                new { name = "Jordan Co-owner", percentage = 50m, isWorkspaceOwner = false }
+                new { name = "Alex Co-owner", percentage = 50m, isWorkspaceOwner = false }
             }
         });
         Assert.Equal(HttpStatusCode.Created, replacement.StatusCode);
@@ -147,7 +147,13 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         Assert.Equal(contributionId, corrected.GetProperty("contributions")[0].GetProperty("reversesOwnershipContributionId").GetGuid());
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/contributions", new
         {
-            partyName = "Taylor Owner",
+            partyName = "Jordan Co-owner",
+            effectiveOn = "2026-03-01",
+            amount = 100m
+        })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/contributions", new
+        {
+            partyName = "Alex Co-owner",
             effectiveOn = "2026-03-01",
             amount = 0.001m
         })).StatusCode);
@@ -157,7 +163,7 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
             .GetProperty("archivedAt").ValueKind != JsonValueKind.Null);
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync($"/api/legal-entities/{entityId}/contributions", new
         {
-            partyName = "Jordan Co-owner",
+            partyName = "Alex Co-owner",
             effectiveOn = "2026-03-01",
             amount = 100m
         })).StatusCode);

@@ -192,8 +192,12 @@ public static class LegalEntityEndpoints
             return Results.Conflict(new { detail = "Archived legal entities cannot receive new contribution records." });
         }
         if (!TryValidateContribution(request, out var errors)) return Results.ValidationProblem(errors);
+        var supersededSnapshotIds = database.OwnershipSnapshots
+            .Where(item => item.LegalEntityId == entity.Id && item.SupersedesOwnershipSnapshotId != null)
+            .Select(item => item.SupersedesOwnershipSnapshotId!.Value);
         var snapshot = await database.OwnershipSnapshots.Include(item => item.Parties)
-            .Where(item => item.LegalEntityId == entity.Id && item.EffectiveFrom <= request.EffectiveOn)
+            .Where(item => item.LegalEntityId == entity.Id && item.EffectiveFrom <= request.EffectiveOn &&
+                !supersededSnapshotIds.Contains(item.Id))
             .OrderByDescending(item => item.EffectiveFrom).FirstOrDefaultAsync(cancellationToken);
         if (snapshot is null || !snapshot.Parties.Any(item => string.Equals(item.Name, request.PartyName.Trim(),
                 StringComparison.OrdinalIgnoreCase)))
