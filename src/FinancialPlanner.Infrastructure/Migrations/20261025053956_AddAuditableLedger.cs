@@ -44,6 +44,7 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     LegalEntityId = table.Column<Guid>(type: "uuid", nullable: false),
                     Type = table.Column<int>(type: "integer", nullable: false),
                     Status = table.Column<int>(type: "integer", nullable: false),
+                    Currency = table.Column<string>(type: "character varying(3)", maxLength: 3, nullable: false),
                     EffectiveOn = table.Column<DateOnly>(type: "date", nullable: false),
                     Description = table.Column<string>(type: "character varying(512)", maxLength: 512, nullable: false),
                     CreatedByUserId = table.Column<Guid>(type: "uuid", nullable: false),
@@ -139,7 +140,8 @@ namespace FinancialPlanner.Infrastructure.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_LedgerJournals_ReversesJournalId",
                 table: "LedgerJournals",
-                column: "ReversesJournalId");
+                column: "ReversesJournalId",
+                unique: true);
         }
 
         /// <inheritdoc />
