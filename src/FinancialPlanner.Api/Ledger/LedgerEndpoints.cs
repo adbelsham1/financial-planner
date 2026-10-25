@@ -4,6 +4,7 @@ using FinancialPlanner.Api.Auth;
 using FinancialPlanner.Infrastructure;
 using FinancialPlanner.Infrastructure.Ledger;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace FinancialPlanner.Api.Ledger;
 
@@ -48,7 +49,14 @@ public static class LedgerEndpoints
             return Results.Conflict(new { detail = "Account codes must be unique within a legal entity." });
         database.LedgerAccounts.Add(account);
         audit.Add(context, "ledger.account-created", $"ledger-account:{account.Id}", "success", tenantId, actorId);
-        await database.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        {
+            return Results.Conflict(new { detail = "Account codes must be unique within a legal entity." });
+        }
         return Results.Created($"/api/legal-entities/{legalEntityId}/ledger/accounts/{account.Id}", AccountResponse.From(account));
     }
 
@@ -91,7 +99,7 @@ public static class LedgerEndpoints
         ClaimsPrincipal principal, LegalEntityAccessService access, PlannerDbContext database, AuditService audit,
         HttpContext context, CancellationToken cancellationToken) =>
         await CreateDraftAsync(legalEntityId, request.EffectiveOn, request.Description, request.Lines, LedgerJournalType.Manual,
-            null, null, null, principal, access, database, audit, context, cancellationToken);
+            null, null, null, false, principal, access, database, audit, context, cancellationToken);
 
     private static async Task<IResult> CreateOpeningBalanceAsync(Guid legalEntityId, CreateOpeningBalanceRequest request,
         ClaimsPrincipal principal, LegalEntityAccessService access, PlannerDbContext database, AuditService audit,
@@ -102,10 +110,10 @@ public static class LedgerEndpoints
         var equity = await database.LedgerAccounts.SingleOrDefaultAsync(item => item.Id == request.OpeningBalanceEquityAccountId &&
             item.TenantId == tenantId && item.LegalEntityId == legalEntityId && item.Type == LedgerAccountType.Equity &&
             item.ArchivedAt == null, cancellationToken);
-        if (equity is null || !request.Lines.Where(item => item is not null).Any(item => item!.AccountId == equity.Id))
+        if (request.Lines is null || equity is null || !request.Lines.Where(item => item is not null).Any(item => item!.AccountId == equity.Id))
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["openingBalanceEquityAccountId"] = ["An active equity account included in the opening balance is required."] });
         return await CreateDraftAsync(legalEntityId, request.EffectiveOn, request.Description, request.Lines,
-            LedgerJournalType.OpeningBalance, null, null, null, principal, access, database, audit, context, cancellationToken);
+            LedgerJournalType.OpeningBalance, null, null, null, false, principal, access, database, audit, context, cancellationToken);
     }
 
     private static async Task<IResult> ApproveJournalAsync(Guid legalEntityId, Guid journalId, ClaimsPrincipal principal,
@@ -114,6 +122,8 @@ public static class LedgerEndpoints
     {
         if (!TryGetTenant(principal, out var tenantId, out var actorId) ||
             !await access.CanAccessAsync(principal, legalEntityId, TenantCapability.Write, cancellationToken)) return Results.NotFound();
+        if (!await IsActiveEntityAsync(legalEntityId, tenantId, database, cancellationToken))
+            return Results.Conflict(new { detail = "Archived legal entities cannot receive ledger records." });
         var journal = await database.LedgerJournals.Include(item => item.Lines).SingleOrDefaultAsync(item =>
             item.Id == journalId && item.TenantId == tenantId && item.LegalEntityId == legalEntityId, cancellationToken);
         if (journal is null) return Results.NotFound();
@@ -123,7 +133,14 @@ public static class LedgerEndpoints
         journal.ApprovedByUserId = actorId;
         journal.ApprovedAt = DateTimeOffset.UtcNow;
         audit.Add(context, "ledger.journal-approved", $"ledger-journal:{journal.Id}", "success", tenantId, actorId);
-        await database.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Results.Conflict(new { detail = "The journal was approved by another request." });
+        }
         return Results.Ok(await ToJournalResponseAsync(journal, database, cancellationToken));
     }
 
@@ -141,7 +158,7 @@ public static class LedgerEndpoints
         var reversedLines = original.Lines.Select(item => new LedgerLineRequest(item.LedgerAccountId, item.Credit, item.Debit,
             item.GstTaxTreatment.ToString())).Cast<LedgerLineRequest?>().ToList();
         return await CreateDraftAsync(legalEntityId, request.EffectiveOn, request.Description, reversedLines,
-            LedgerJournalType.Manual, original.Id, null, original, principal, access, database, audit, context, cancellationToken);
+            LedgerJournalType.Manual, original.Id, null, original, true, principal, access, database, audit, context, cancellationToken);
     }
 
     private static async Task<IResult> CreateAdjustmentAsync(Guid legalEntityId, Guid journalId, CreateAdjustmentRequest request,
@@ -154,7 +171,7 @@ public static class LedgerEndpoints
             item.LegalEntityId == legalEntityId && item.Status == LedgerJournalStatus.Approved, cancellationToken);
         if (original is null) return Results.NotFound();
         return await CreateDraftAsync(legalEntityId, request.EffectiveOn, request.Description, request.Lines,
-            LedgerJournalType.Manual, null, original.Id, original, principal, access, database, audit, context, cancellationToken);
+            LedgerJournalType.Manual, null, original.Id, original, false, principal, access, database, audit, context, cancellationToken);
     }
 
     private static async Task<IResult> ListJournalsAsync(Guid legalEntityId, ClaimsPrincipal principal,
@@ -187,16 +204,19 @@ public static class LedgerEndpoints
                 journal.Status == LedgerJournalStatus.Approved && journal.EffectiveOn <= asOf))
             .ToListAsync(cancellationToken);
         var accounts = await database.LedgerAccounts.AsNoTracking().Where(item => item.LegalEntityId == legalEntityId).ToListAsync(cancellationToken);
-        var rows = accounts.Select(account => new TrialBalanceRow(account.Id, account.Code, account.Name, account.Type.ToString(),
-            lines.Where(line => line.LedgerAccountId == account.Id).Sum(line => line.Debit),
-            lines.Where(line => line.LedgerAccountId == account.Id).Sum(line => line.Credit)))
+        var rows = accounts.Select(account =>
+        {
+            var net = lines.Where(line => line.LedgerAccountId == account.Id).Sum(line => line.Debit - line.Credit);
+            return new TrialBalanceRow(account.Id, account.Code, account.Name, account.Type.ToString(),
+                net > 0 ? net : 0, net < 0 ? -net : 0);
+        })
             .Where(item => item.Debit != 0 || item.Credit != 0).OrderBy(item => item.Code).ToList();
         return Results.Ok(new TrialBalanceResponse(asOf, rows, rows.Sum(item => item.Debit), rows.Sum(item => item.Credit)));
     }
 
     private static async Task<IResult> CreateDraftAsync(Guid legalEntityId, DateOnly effectiveOn, string description,
-        IReadOnlyList<LedgerLineRequest?> lines, LedgerJournalType type, Guid? reversesJournalId, Guid? adjustsJournalId,
-        LedgerJournal? original, ClaimsPrincipal principal, LegalEntityAccessService access, PlannerDbContext database,
+        IReadOnlyList<LedgerLineRequest?>? lines, LedgerJournalType type, Guid? reversesJournalId, Guid? adjustsJournalId,
+        LedgerJournal? original, bool allowArchivedAccounts, ClaimsPrincipal principal, LegalEntityAccessService access, PlannerDbContext database,
         AuditService audit, HttpContext context, CancellationToken cancellationToken)
     {
         if (!TryGetTenant(principal, out var tenantId, out var actorId) ||
@@ -210,7 +230,7 @@ public static class LedgerEndpoints
         }
         var accountIds = draftLines.Select(item => item.LedgerAccountId).Distinct().ToList();
         var validAccountCount = await database.LedgerAccounts.CountAsync(item => item.LegalEntityId == legalEntityId &&
-            item.TenantId == tenantId && item.ArchivedAt == null && accountIds.Contains(item.Id), cancellationToken);
+            item.TenantId == tenantId && (allowArchivedAccounts || item.ArchivedAt == null) && accountIds.Contains(item.Id), cancellationToken);
         if (validAccountCount != accountIds.Count)
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["Every line must use an active account in this legal entity."] });
         var journal = new LedgerJournal
@@ -218,6 +238,7 @@ public static class LedgerEndpoints
             TenantId = tenantId,
             LegalEntityId = legalEntityId,
             Type = type,
+            Currency = "AUD",
             EffectiveOn = effectiveOn,
             Description = description.Trim(),
             CreatedByUserId = actorId,
@@ -228,7 +249,14 @@ public static class LedgerEndpoints
         database.LedgerJournals.Add(journal);
         audit.Add(context, original is null ? "ledger.journal-created" : reversesJournalId is not null ? "ledger.journal-reversal-created" :
             "ledger.journal-adjustment-created", $"ledger-journal:{journal.Id}", "success", tenantId, actorId);
-        await database.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (reversesJournalId is not null && IsUniqueViolation(exception))
+        {
+            return Results.Conflict(new { detail = "This journal has already been reversed." });
+        }
         return Results.Created($"/api/legal-entities/{legalEntityId}/ledger/journals/{journal.Id}",
             await ToJournalResponseAsync(journal, database, cancellationToken));
     }
@@ -279,6 +307,7 @@ public static class LedgerEndpoints
     }
 
     private static bool IsBalanced(IEnumerable<LedgerJournalLine> lines) => lines.Sum(item => item.Debit) == lines.Sum(item => item.Credit);
+    private static bool IsUniqueViolation(DbUpdateException exception) => exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
     private static bool HasAtMostScale(decimal value, int scale) => value == decimal.Round(value, scale, MidpointRounding.ToZero);
     private static async Task<bool> IsActiveEntityAsync(Guid id, Guid tenantId, PlannerDbContext database, CancellationToken token) =>
         await database.LegalEntities.AnyAsync(item => item.Id == id && item.TenantId == tenantId && item.ArchivedAt == null, token);
@@ -300,7 +329,7 @@ public static class LedgerEndpoints
         var accountIds = list.SelectMany(item => item.Lines).Select(item => item.LedgerAccountId).Distinct().ToList();
         var accounts = await database.LedgerAccounts.AsNoTracking().Where(item => accountIds.Contains(item.Id))
             .ToDictionaryAsync(item => item.Id, token);
-        return list.Select(journal => new JournalResponse(journal.Id, journal.Type.ToString(), journal.Status.ToString(), journal.EffectiveOn,
+        return list.Select(journal => new JournalResponse(journal.Id, journal.Type.ToString(), journal.Status.ToString(), journal.Currency, journal.EffectiveOn,
             journal.Description, journal.CreatedByUserId, journal.CreatedAt, journal.ApprovedByUserId, journal.ApprovedAt,
             journal.ReversesJournalId, journal.AdjustsJournalId, journal.Lines.Select(line => new JournalLineResponse(line.Id,
                 line.LedgerAccountId, accounts[line.LedgerAccountId].Code, accounts[line.LedgerAccountId].Name, line.Debit, line.Credit,
@@ -311,7 +340,7 @@ public static class LedgerEndpoints
     {
         public static AccountResponse From(LedgerAccount account) => new(account.Id, account.Code, account.Name, account.Type.ToString(), account.CreatedAt, account.ArchivedAt);
     }
-    private sealed record JournalResponse(Guid Id, string Type, string Status, DateOnly EffectiveOn, string Description, Guid CreatedByUserId,
+    private sealed record JournalResponse(Guid Id, string Type, string Status, string Currency, DateOnly EffectiveOn, string Description, Guid CreatedByUserId,
         DateTimeOffset CreatedAt, Guid? ApprovedByUserId, DateTimeOffset? ApprovedAt, Guid? ReversesJournalId, Guid? AdjustsJournalId,
         IReadOnlyList<JournalLineResponse> Lines);
     private sealed record JournalLineResponse(Guid Id, Guid AccountId, string AccountCode, string AccountName, decimal Debit, decimal Credit,

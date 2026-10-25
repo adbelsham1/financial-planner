@@ -1,5 +1,5 @@
 import { Alert, Box, Button, Container, CssBaseline, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
-import React, { FormEvent, useEffect, useState } from 'react';
+import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import {
   addContribution, addOwnershipSnapshot, archiveLegalEntity, beginSignIn, completePasswordReset, completeSignIn,
   approveLedgerJournal, createLedgerAccount, createLedgerJournal, createLegalEntity, createOpeningBalance, currentUser,
@@ -24,16 +24,30 @@ const App = () => {
   const [journals, setJournals] = useState<LedgerJournal[]>([]);
   const [balance, setBalance] = useState<TrialBalance>();
   const [auditEntries, setAuditEntries] = useState<{ action: string; occurredAt: string }[]>([]);
+  const selectedEntityRef = useRef<string>();
 
   const loadEntities = async () => setEntities(await legalEntities());
+  const clearLedger = () => {
+    setAccounts([]); setJournals([]); setBalance(undefined); setAuditEntries([]);
+  };
   const loadLedger = async (entityId: string) => {
     const [loadedAccounts, loadedJournals] = await Promise.all([ledgerAccounts(entityId), ledgerJournals(entityId)]);
+    if (selectedEntityRef.current !== entityId) return;
     setAccounts(loadedAccounts); setJournals(loadedJournals); setBalance(undefined); setAuditEntries([]);
+  };
+  const loadTrialBalance = async (entityId: string, asOf: string) => {
+    const loadedBalance = await trialBalance(entityId, asOf);
+    if (selectedEntityRef.current === entityId) setBalance(loadedBalance);
+  };
+  const loadAudit = async (entityId: string, journalId: string) => {
+    const entries = await ledgerAudit(entityId, journalId);
+    if (selectedEntityRef.current === entityId) setAuditEntries(entries);
   };
 
   useEffect(() => {
     currentUser().then((authenticatedUser) => {
       setUser(authenticatedUser);
+      selectedEntityRef.current = undefined; setSelectedEntityId(undefined); clearLedger();
       setScreen('authenticated');
       return authenticatedUser.role === 'Owner' ? loadEntities() : undefined;
     }).catch(() => undefined);
@@ -75,7 +89,7 @@ const App = () => {
 
   const logout = async () => {
     await signOut();
-    setUser(undefined); setEntities([]); setScreen('sign-in'); setNotice('You have signed out.');
+    selectedEntityRef.current = undefined; setUser(undefined); setEntities([]); clearLedger(); setScreen('sign-in'); setNotice('You have signed out.');
   };
 
   const manageEntity = async (event: FormEvent<HTMLFormElement>) => {
@@ -97,7 +111,8 @@ const App = () => {
         } : {}),
       };
       const entity = await createLegalEntity(payload);
-      setSelectedEntityId(entity.id); await loadEntities(); formElement.reset(); setEntityKind('Personal');
+      selectedEntityRef.current = entity.id; setSelectedEntityId(entity.id); clearLedger();
+      await loadEntities(); formElement.reset(); setEntityKind('Personal');
       setNotice('Legal entity created.');
     } catch {
       setError('We could not create that legal entity. Check the ownership allocation and try again.');
@@ -170,7 +185,7 @@ const App = () => {
     try {
       if (opening) await createOpeningBalance(entity.id, {
         effectiveOn: String(form.get('effectiveOn')), description: String(form.get('description')),
-        openingBalanceEquityAccountId: creditAccountId, lines,
+        openingBalanceEquityAccountId: String(form.get('openingBalanceEquityAccountId')), lines,
       });
       else await createLedgerJournal(entity.id, { effectiveOn: String(form.get('effectiveOn')), description: String(form.get('description')), lines });
       await loadLedger(entity.id); setNotice(opening ? 'Opening balance draft created.' : 'Manual journal draft created.');
@@ -182,9 +197,9 @@ const App = () => {
     catch { setError('We could not approve that journal.'); }
   };
 
-  const reverseJournal = async (entity: LegalEntity, journal: LedgerJournal) => {
+  const reverseJournal = async (entity: LegalEntity, journal: LedgerJournal, effectiveOn: string) => {
     try {
-      await reverseLedgerJournal(entity.id, journal.id, new Date().toISOString().slice(0, 10), `Reversal of ${journal.description}`);
+      await reverseLedgerJournal(entity.id, journal.id, effectiveOn, `Reversal of ${journal.description}`.slice(0, 512));
       await loadLedger(entity.id); setNotice('Linked reversal draft created.');
     } catch { setError('We could not create that reversal.'); }
   };
@@ -231,7 +246,10 @@ const App = () => {
           <Typography component="h3" variant="h6">{entity.name} {entity.archivedAt ? '(Archived)' : ''}</Typography>
           <Typography color="text.secondary">{entity.kind} · Legal ownership: {entity.legalOwnershipPercentage}% · Your attributable share: {entity.ownerAttributablePercentage}%</Typography>
           <Stack direction="row" spacing={1}>
-            <Button onClick={() => { setSelectedEntityId(entity.id); loadLedger(entity.id).catch(() => setError('We could not load the ledger.')); }}>View history</Button>
+            <Button onClick={() => {
+              selectedEntityRef.current = entity.id; setSelectedEntityId(entity.id); clearLedger();
+              loadLedger(entity.id).catch(() => setError('We could not load the ledger.'));
+            }}>View history</Button>
             {!entity.archivedAt && <Button color="warning" onClick={() => archiveLegalEntity(entity.id).then(loadEntities).catch(() => setError('We could not archive that entity.'))}>Archive</Button>}
           </Stack>
           {selectedEntityId === entity.id && <Stack spacing={2}>
@@ -284,12 +302,13 @@ const App = () => {
               </TextField>
               <Button type="submit">Create account</Button>
             </Stack>}
-            {accounts.length > 0 && <Stack component="form" spacing={1} onSubmit={(event) => recordLedgerJournal(event, entity, true)}>
+            {accounts.some((account) => account.type === 'Equity' && !account.archivedAt) && <Stack component="form" spacing={1} onSubmit={(event) => recordLedgerJournal(event, entity, true)}>
               <Typography variant="subtitle2">Record opening balance</Typography>
               <TextField required label="Opening balance date" name="effectiveOn" type="date" slotProps={{ inputLabel: { shrink: true } }} />
               <TextField required label="Opening balance description" name="description" />
-              <TextField required select label="Debit account" name="debitAccountId" defaultValue={accounts[0]?.id}>{accounts.filter((account) => !account.archivedAt).map((account) => <MenuItem key={account.id} value={account.id}>{account.code} · {account.name}</MenuItem>)}</TextField>
-              <TextField required select label="Opening balance equity account" name="creditAccountId" defaultValue={accounts.find((account) => account.type === 'Equity')?.id}>{accounts.filter((account) => account.type === 'Equity' && !account.archivedAt).map((account) => <MenuItem key={account.id} value={account.id}>{account.code} · {account.name}</MenuItem>)}</TextField>
+              <TextField required select label="Opening debit account" name="debitAccountId" defaultValue={accounts.find((account) => account.type !== 'Equity' && !account.archivedAt)?.id}>{accounts.filter((account) => !account.archivedAt).map((account) => <MenuItem key={account.id} value={account.id}>{account.code} · {account.name}</MenuItem>)}</TextField>
+              <TextField required select label="Opening credit account" name="creditAccountId" defaultValue={accounts.find((account) => account.type === 'Equity' && !account.archivedAt)?.id}>{accounts.filter((account) => !account.archivedAt).map((account) => <MenuItem key={account.id} value={account.id}>{account.code} · {account.name}</MenuItem>)}</TextField>
+              <TextField required select label="Opening balance equity account" name="openingBalanceEquityAccountId" defaultValue={accounts.find((account) => account.type === 'Equity' && !account.archivedAt)?.id}>{accounts.filter((account) => account.type === 'Equity' && !account.archivedAt).map((account) => <MenuItem key={account.id} value={account.id}>{account.code} · {account.name}</MenuItem>)}</TextField>
               <TextField required label="Opening balance amount (AUD)" name="amount" type="number" inputProps={{ min: 0.01, step: 0.01 }} />
               <TextField required select label="Opening GST treatment" name="gstTaxTreatment" defaultValue="BasExcluded"><MenuItem value="BasExcluded">BAS excluded</MenuItem><MenuItem value="Taxable">Taxable (10%)</MenuItem><MenuItem value="GstFree">GST-free</MenuItem><MenuItem value="InputTaxed">Input-taxed</MenuItem></TextField>
               <Button type="submit">Create opening balance draft</Button>
@@ -309,13 +328,15 @@ const App = () => {
               {journal.lines.map((line) => <Typography key={line.id} color="text.secondary">{line.accountCode} · Dr {line.debit} · Cr {line.credit} · {line.gstTaxTreatment} {line.gstRate * 100}%</Typography>)}
               <Stack direction="row" spacing={1}>
                 {journal.status === 'Draft' && <Button onClick={() => approveJournal(entity, journal.id)}>Approve journal</Button>}
-                {journal.status === 'Approved' && !journal.reversesJournalId && <Button onClick={() => reverseJournal(entity, journal)}>Reverse journal</Button>}
-                <Button onClick={() => ledgerAudit(entity.id, journal.id).then(setAuditEntries).catch(() => setError('We could not load the audit history.'))}>View audit history</Button>
+                {journal.status === 'Approved' && !journal.reversesJournalId && <Stack component="form" direction="row" spacing={1} onSubmit={(event) => {
+                  event.preventDefault(); reverseJournal(entity, journal, String(new FormData(event.currentTarget).get('effectiveOn')));
+                }}><TextField required label="Reversal date" name="effectiveOn" type="date" slotProps={{ inputLabel: { shrink: true } }} /><Button type="submit">Reverse journal</Button></Stack>}
+                <Button onClick={() => loadAudit(entity.id, journal.id).catch(() => setError('We could not load the audit history.'))}>View audit history</Button>
               </Stack>
             </Stack>)}
             <Stack component="form" direction="row" spacing={1} onSubmit={(event) => {
               event.preventDefault(); const asOf = String(new FormData(event.currentTarget).get('asOf'));
-              trialBalance(entity.id, asOf).then(setBalance).catch(() => setError('We could not load the trial balance.'));
+              loadTrialBalance(entity.id, asOf).catch(() => setError('We could not load the trial balance.'));
             }}>
               <TextField required label="Trial balance as of" name="asOf" type="date" slotProps={{ inputLabel: { shrink: true } }} />
               <Button type="submit">Review trial balance</Button>

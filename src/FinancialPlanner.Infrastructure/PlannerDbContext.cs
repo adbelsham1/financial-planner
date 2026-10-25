@@ -64,7 +64,10 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
         builder.Entity<LedgerAccount>().HasOne<LegalEntity>().WithMany()
             .HasForeignKey(item => item.LegalEntityId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<LedgerJournal>().HasIndex(item => new { item.LegalEntityId, item.EffectiveOn, item.Status });
+        builder.Entity<LedgerJournal>().HasIndex(item => item.ReversesJournalId).IsUnique();
         builder.Entity<LedgerJournal>().Property(item => item.Description).HasMaxLength(512);
+        builder.Entity<LedgerJournal>().Property(item => item.Currency).HasMaxLength(3).HasDefaultValue("AUD");
+        builder.Entity<LedgerJournal>().Property(item => item.Status).IsConcurrencyToken();
         builder.Entity<LedgerJournal>().HasOne<LegalEntity>().WithMany()
             .HasForeignKey(item => item.LegalEntityId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<LedgerJournal>().HasOne<LedgerJournal>().WithMany()
@@ -94,6 +97,11 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
 
     private void EnsureImmutableRecordsAreUnchanged()
     {
+        var addedLineJournalIds = ChangeTracker.Entries<LedgerJournalLine>()
+            .Where(entry => entry.State == EntityState.Added && entry.Entity.LedgerJournalId != Guid.Empty)
+            .Select(entry => entry.Entity.LedgerJournalId).Distinct().ToList();
+        var addedLinesForApprovedJournals = addedLineJournalIds.Count > 0 && LedgerJournals.AsNoTracking()
+            .Any(journal => addedLineJournalIds.Contains(journal.Id) && journal.Status == LedgerJournalStatus.Approved);
         if (ChangeTracker.Entries<AuditEvent>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<OwnershipSnapshot>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<OwnershipParty>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
@@ -101,7 +109,8 @@ public sealed class PlannerDbContext(DbContextOptions<PlannerDbContext> options)
             ChangeTracker.Entries<LedgerJournalLine>().Any(entry => entry.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<LedgerJournal>().Any(entry => entry.State is EntityState.Deleted ||
                 entry.State is EntityState.Modified && entry.OriginalValues.GetValue<LedgerJournalStatus>(
-                    nameof(LedgerJournal.Status)) == LedgerJournalStatus.Approved))
+                    nameof(LedgerJournal.Status)) == LedgerJournalStatus.Approved) ||
+            addedLinesForApprovedJournals)
         {
             throw new InvalidOperationException("Audit events, ownership records, approved journals, and journal lines are append-only.");
         }

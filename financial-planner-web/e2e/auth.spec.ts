@@ -82,9 +82,10 @@ test('owner can post, approve, reverse, and review a manual ledger', async ({ pa
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByLabel('Verification code')).toBeVisible();
   await page.getByLabel('Verification code').fill(await latestCode(request, email));
   await page.getByRole('button', { name: 'Verify and sign in' }).click();
-
+  await expect(page.getByRole('heading', { name: 'You are signed in' })).toBeVisible();
   await page.getByLabel('Entity name').fill('Ledger household');
   await page.getByRole('button', { name: 'Create legal entity' }).click();
   const entity = page.getByRole('heading', { name: 'Ledger household' }).locator('..');
@@ -111,13 +112,19 @@ test('owner can post, approve, reverse, and review a manual ledger', async ({ pa
   await page.getByRole('button', { name: 'Approve journal' }).first().click();
   await page.getByLabel('Journal date').fill('2026-01-02');
   await page.getByLabel('Journal description').fill('Salary received');
+  await page.getByLabel('Journal credit account').click();
+  await page.getByRole('option', { name: '4000 · Salary income' }).click();
   await page.getByLabel('Journal amount (AUD)').fill('200');
   await page.getByRole('button', { name: 'Create manual journal draft' }).click();
   await page.getByRole('button', { name: 'Approve journal' }).click();
-  await page.getByRole('button', { name: 'Reverse journal' }).last().click();
+  const salaryJournal = page.getByText('2026-01-02: Salary received (Approved)').locator('..');
+  await salaryJournal.getByLabel('Reversal date').fill('2026-01-03');
+  await salaryJournal.getByRole('button', { name: 'Reverse journal' }).click();
   await expect(page.getByText('Linked reversal draft created.')).toBeVisible();
   await page.getByRole('button', { name: 'Approve journal' }).click();
   await page.getByLabel('Trial balance as of').fill('2026-12-31');
   await page.getByRole('button', { name: 'Review trial balance' }).click();
-  await expect(page.getByText('Total · Dr 1400 · Cr 1400')).toBeVisible();
+  await expect(page.getByText('1000 · Cash at bank · Dr 1000 · Cr 0')).toBeVisible();
+  await expect(page.getByText('3000 · Opening Balance Equity · Dr 0 · Cr 1000')).toBeVisible();
+  await expect(page.getByText('Total · Dr 1000 · Cr 1000')).toBeVisible();
 });

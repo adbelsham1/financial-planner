@@ -448,6 +448,13 @@ namespace FinancialPlanner.Infrastructure.Migrations
                     b.Property<Guid>("CreatedByUserId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasDefaultValue("AUD");
+
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -463,6 +470,7 @@ namespace FinancialPlanner.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer");
 
                     b.Property<Guid>("TenantId")
@@ -475,7 +483,8 @@ namespace FinancialPlanner.Infrastructure.Migrations
 
                     b.HasIndex("AdjustsJournalId");
 
-                    b.HasIndex("ReversesJournalId");
+                    b.HasIndex("ReversesJournalId")
+                        .IsUnique();
 
                     b.HasIndex("LegalEntityId", "EffectiveOn", "Status");
 

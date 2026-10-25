@@ -48,6 +48,7 @@ public sealed class LedgerJournal
     public Guid LegalEntityId { get; init; }
     public LedgerJournalType Type { get; init; }
     public LedgerJournalStatus Status { get; set; } = LedgerJournalStatus.Draft;
+    public required string Currency { get; init; } = "AUD";
     public required DateOnly EffectiveOn { get; init; }
     public required string Description { get; init; }
     public Guid CreatedByUserId { get; init; }

@@ -107,7 +107,7 @@ export const reverseContribution = async (id: string, contributionId: string, ef
 
 export type LedgerAccount = { id: string; code: string; name: string; type: string; archivedAt: string | null };
 export type LedgerJournal = {
-  id: string; type: string; status: string; effectiveOn: string; description: string;
+  id: string; type: string; status: string; currency: string; effectiveOn: string; description: string;
   reversesJournalId: string | null; adjustsJournalId: string | null;
   lines: { id: string; accountId: string; accountCode: string; accountName: string; debit: number; credit: number; gstTaxTreatment: string; gstRate: number }[];
 };

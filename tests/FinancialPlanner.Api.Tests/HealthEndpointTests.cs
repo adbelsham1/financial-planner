@@ -255,6 +255,7 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         Assert.Equal(HttpStatusCode.Created, opening.StatusCode);
         using var openingDocument = JsonDocument.Parse(await opening.Content.ReadAsStringAsync());
         var openingId = openingDocument.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal("AUD", openingDocument.RootElement.GetProperty("currency").GetString());
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync(
             $"/api/legal-entities/{entityId}/ledger/journals/{openingId}/approve", null)).StatusCode);
 
@@ -304,7 +305,11 @@ public sealed class HealthEndpointTests(WebApplicationFactory<Program> factory)
         Assert.Contains(audit.EnumerateArray(), item => item.GetProperty("action").GetString() == "ledger.journal-approved");
         var trialBalance = await client.GetFromJsonAsync<JsonElement>($"/api/legal-entities/{entityId}/ledger/trial-balance?asOf=2026-01-03");
         Assert.Equal(trialBalance.GetProperty("totalDebits").GetDecimal(), trialBalance.GetProperty("totalCredits").GetDecimal());
-        Assert.Equal(1400m, trialBalance.GetProperty("totalDebits").GetDecimal());
+        Assert.Equal(1000m, trialBalance.GetProperty("totalDebits").GetDecimal());
+        var balances = trialBalance.GetProperty("accounts").EnumerateArray().ToList();
+        Assert.Contains(balances, item => item.GetProperty("code").GetString() == "1000" &&
+            item.GetProperty("debit").GetDecimal() == 1000m && item.GetProperty("credit").GetDecimal() == 0m);
+        Assert.DoesNotContain(balances, item => item.GetProperty("code").GetString() == "4000");
     }
 
     private static async Task RegisterAndSignInAsync(HttpClient client)
